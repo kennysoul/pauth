@@ -19,13 +19,24 @@ systemRoutes.get('/state', async (c) => {
 systemRoutes.get('/verify', async (c) => {
   const resolved = await resolveAnySessionForVerify(c);
   if (!resolved || resolved.user.status !== 'active') {
-    return c.body(null, 401);
+    // 从 Caddy forward_auth 传入的原始请求信息
+    const proto    = c.req.header('X-Forwarded-Proto') ?? 'https';
+    const host     = c.req.header('X-Forwarded-Host')  ?? c.req.header('Host') ?? '';
+    const uri      = c.req.header('X-Forwarded-Uri')   ?? '/';
+    const returnTo = host ? `${proto}://${host}${uri}` : '';
+
+    const loginUrl = `https://${c.env.AUTH_HOST}/login${
+      returnTo ? `?return_to=${encodeURIComponent(returnTo)}` : ''
+    }`;
+
+    return c.redirect(loginUrl, 302);
   }
 
   return c.body(null, 200, {
-    'X-Auth-User-Id': resolved.user.id,
+    'X-Auth-User-Id':    resolved.user.id,
     'X-Auth-User-Email': resolved.user.email,
-    'X-Auth-User-Name': resolved.user.name,
-    'X-Auth-User-Role': resolved.user.role,
+    'X-Auth-User-Name':  resolved.user.name,
+    'X-Auth-User-Role':  resolved.user.role,
+    'Cache-Control':     'private, no-store, must-revalidate',
   });
 });
