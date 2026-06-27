@@ -14,6 +14,7 @@ const app = new Hono<{ Bindings: Env; Variables: AuthContext }>();
 app.use('/api/*', csrfOriginCheck);
 
 app.route('/api/system', systemRoutes);
+app.route('/api', systemRoutes);        // expose /api/verify (no auth)
 app.route('/api/setup', setupRoutes);
 app.route('/api/register', registerRoutes);
 app.route('/api/login', loginRoutes);

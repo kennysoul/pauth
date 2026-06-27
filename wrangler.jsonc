@@ -38,6 +38,14 @@
     }
   ],
 
+  "routes": [
+    {
+      "pattern": "auth.cdnc.us",
+      "zone_name": "cdnc.us",
+      "custom_domain": true
+    }
+  ],
+
   "observability": {
     "enabled": true
   }
