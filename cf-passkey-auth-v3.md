@@ -1,0 +1,722 @@
+# Cloudflare Passkey 认证系统 v3
+
+> **Workers + Assets + D1 + KV** · 中央认证 `auth.xxx.com` · **`.xxx.com` 共享 Cookie** · **Caddy Forward Auth** · **永远审批**
+
+---
+
+## 1. 目标与范围
+
+### 1.1 要解决的问题
+
+| 需求 | 方案 |
+|------|------|
+| 首次部署时在 auth 注册管理员，完成后不再出现 setup | 两态状态机 `NEEDS_SETUP` → `ACTIVE` |
+| 管理员控制是否开放注册 | `registration_enabled` 开关 |
+| **永远必须审批** | 普通用户注册后恒为 `pending`，无关闭选项 |
+| 全站 `*.xxx.com` 统一认证 | Passkey 只在 `auth.xxx.com`；子域用 Forward Auth |
+| 一把 Passkey 管全站 | `RP_ID = xxx.com`（可注册域） |
+| 子域不做注册/登录 | Caddy `forward_auth` → `/api/verify` |
+
+### 1.2 不在范围内
+
+- 跨 apex 域（如 `yyy.com`）
+- OAuth2/OIDC（`*.xxx.com` 共享 Cookie 已足够）
+- 按用户分配「可访问哪个子域」（审批通过即全站有效）
+
+---
+
+## 2. 总体架构
+
+```
+                         ┌──────────────────────────────────┐
+                         │   auth.xxx.com (Cloudflare Worker) │
+                         │   Hono /api/*  +  SPA (Assets)    │
+                         │   Passkey 注册 · 登录 · 管理后台    │
+                         └───────────────┬──────────────────┘
+                                         │
+                    ┌────────────────────┼────────────────────┐
+                    │                    │                    │
+               ┌────▼────┐          ┌────▼────┐         ┌─────▼─────┐
+               │   D1    │          │   KV    │         │  Cookie   │
+               │ users   │          │challenge│         │ Domain=   │
+               │ passkeys│          │ TTL 60s │         │ .xxx.com  │
+               │ sessions│          └─────────┘         └───────────┘
+               │ config  │
+               │ audit   │
+               └─────────┘
+
+  用户浏览器
+       │
+       ├─► app.xxx.com ──► Caddy forward_auth ──► GET auth.xxx.com/api/verify
+       │                         │                        │
+       │                    401 │                   200 + X-Auth-*
+       │                         ▼                        ▼
+       │              302 auth.xxx.com/login      反代业务内容
+       │
+       └─► auth.xxx.com/login ── Passkey ── Set-Cookie .xxx.com ── 302 回 app
+```
+
+**技术栈**
+
+| 层 | 选型 |
+|----|------|
+| 运行时 | Cloudflare Workers（`nodejs_compat`） |
+| HTTP | Hono |
+| WebAuthn | `@simplewebauthn/server` + `@simplewebauthn/browser` |
+| 数据库 | D1 + Drizzle（或 prepared statements） |
+| Challenge | KV（TTL 60s，用后删除） |
+| 子域网关 | Caddy `forward_auth` |
+| 前端 | 任意 SPA → `dist/` |
+
+---
+
+## 3. 用户访问子域时发生什么
+
+**未登录（无有效 `sid` Cookie）**
+
+```text
+1. 用户打开 https://app.xxx.com/dashboard
+2. Caddy 将请求（含 Cookie）转发到 auth.xxx.com/api/verify
+3. verify 返回 401
+4. Caddy 302 → https://auth.xxx.com/login?return_to=https://app.xxx.com/dashboard
+5. 用户在 auth 看到登录页，点击「Passkey 登录」→ 浏览器弹出 Passkey
+6. 登录成功，Set-Cookie: sid=...; Domain=.xxx.com
+7. 302 回到 https://app.xxx.com/dashboard
+8. forward_auth → verify 200 → 用户看到业务页面
+```
+
+**已登录（有效 Cookie）**
+
+```text
+app.xxx.com → verify 200 → 直接看到内容（无跳转、无 Passkey 弹窗）
+```
+
+要点：**Passkey 只在 `auth.xxx.com` 弹出**；子域不展示登录 UI、不调用 WebAuthn API。
+
+---
+
+## 4. 系统状态机
+
+```text
+NEEDS_SETUP  ── 首个管理员 Passkey 注册成功 ──►  ACTIVE
+     ▲                                              │
+     └──────────── 管理员执行系统重置 ───────────────┘
+```
+
+| 状态 | 含义 |
+|------|------|
+| `NEEDS_SETUP` | 仅允许 `/api/setup/*` 与 `/setup` 页面 |
+| `ACTIVE` | 登录、注册（若开启）、管理后台、verify |
+
+---
+
+## 5. 环境变量
+
+### Secrets（`wrangler secret put`）
+
+| 名称 | 说明 |
+|------|------|
+| `SESSION_SECRET` | Cookie HMAC 密钥，≥32 字节随机 |
+
+### Vars
+
+| 名称 | 生产示例 | 说明 |
+|------|----------|------|
+| `RP_ID` | `xxx.com` | WebAuthn 可注册域；**不是** `auth.xxx.com` |
+| `RP_NAME` | `XXX Auth` | 显示名 |
+| `ORIGIN` | `https://auth.xxx.com` | WebAuthn origin |
+| `COOKIE_DOMAIN` | `.xxx.com` | 共享 session，供 `*.xxx.com` 使用 |
+| `AUTH_HOST` | `auth.xxx.com` | 登录跳转、return_to 校验 |
+| `SESSION_TTL_SECONDS` | `604800` | 7 天 |
+| `SETUP_TTL_SECONDS` | `600` | Bootstrap 中间 session |
+
+本地开发：`RP_ID=localhost`，`ORIGIN=http://localhost:8787`，`COOKIE_DOMAIN` 留空（不设 Domain 属性）。
+
+---
+
+## 6. Wrangler 配置
+
+```jsonc
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "passkey-auth",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-06-05",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "vars": {
+    "RP_ID": "xxx.com",
+    "RP_NAME": "XXX Auth",
+    "ORIGIN": "https://auth.xxx.com",
+    "COOKIE_DOMAIN": ".xxx.com",
+    "AUTH_HOST": "auth.xxx.com",
+    "SESSION_TTL_SECONDS": "604800",
+    "SETUP_TTL_SECONDS": "600"
+  },
+
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
+
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "passkey-auth-db",
+    "database_id": "<YOUR_D1_ID>",
+    "migrations_dir": "migrations"
+  }],
+
+  "kv_namespaces": [{
+    "binding": "CHALLENGES",
+    "id": "<YOUR_KV_ID>"
+  }],
+
+  "observability": { "enabled": true }
+}
+```
+
+**DNS**：`auth.xxx.com` CNAME 到 Cloudflare Worker；业务子域指向跑 Caddy 的机器。
+
+---
+
+## 7. 数据库 Schema
+
+```sql
+-- migrations/0001_init.sql
+
+CREATE TABLE system_config (
+  id                   INTEGER PRIMARY KEY CHECK (id = 1),
+  state                TEXT NOT NULL DEFAULT 'NEEDS_SETUP'
+                         CHECK (state IN ('NEEDS_SETUP', 'ACTIVE')),
+  registration_enabled INTEGER NOT NULL DEFAULT 0,
+  updated_at           TEXT NOT NULL DEFAULT (datetime('now'))
+);
+INSERT INTO system_config (id) VALUES (1);
+
+CREATE TABLE users (
+  id         TEXT PRIMARY KEY,
+  email      TEXT NOT NULL UNIQUE,
+  name       TEXT NOT NULL,
+  role       TEXT NOT NULL DEFAULT 'user'
+               CHECK (role IN ('admin', 'user')),
+  status     TEXT NOT NULL DEFAULT 'pending'
+               CHECK (status IN ('pending', 'active', 'disabled')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX idx_users_status ON users(status);
+CREATE INDEX idx_users_role   ON users(role);
+
+CREATE TABLE passkeys (
+  id            TEXT PRIMARY KEY,
+  user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  credential_id TEXT NOT NULL UNIQUE,
+  public_key    TEXT NOT NULL,
+  counter       INTEGER NOT NULL DEFAULT 0,
+  device_type   TEXT,
+  backed_up     INTEGER NOT NULL DEFAULT 0,
+  transports    TEXT,
+  aaguid        TEXT,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  last_used_at  TEXT
+);
+CREATE INDEX idx_passkeys_user_id ON passkeys(user_id);
+
+CREATE TABLE sessions (
+  id         TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind       TEXT NOT NULL DEFAULT 'normal'
+               CHECK (kind IN ('normal', 'setup')),
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX idx_sessions_user_id ON sessions(user_id);
+CREATE INDEX idx_sessions_expires ON sessions(expires_at);
+
+CREATE TABLE audit_logs (
+  id         TEXT PRIMARY KEY,
+  actor_id   TEXT,
+  action     TEXT NOT NULL,
+  target_id  TEXT,
+  detail     TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX idx_audit_created ON audit_logs(created_at DESC);
+```
+
+**审批策略（硬编码，无 DB 开关）**
+
+- Bootstrap 管理员：`status = active`（否则系统无法启动）
+- 普通用户注册：`status = pending`，**永远**需管理员批准
+- `/api/verify`、登录、`/api/me`：仅 `status === 'active'` 通过
+
+---
+
+## 8. Cookie 规范
+
+| Cookie | 场景 | 属性 |
+|--------|------|------|
+| `sid` | 正式会话 | `HttpOnly; Secure; SameSite=Lax; Path=/; Domain=.xxx.com; Max-Age=604800` |
+| `setup_sid` | Bootstrap / 注册中间态 | `Domain=.xxx.com; Path=/api/setup` 或 `/api/register`; `Max-Age=600` |
+
+Cookie 值 = `sessionId` + HMAC；权威数据在 D1 `sessions`。
+
+**登出**：删 D1 session + `Set-Cookie sid=; Max-Age=0; Domain=.xxx.com`。
+
+---
+
+## 9. API 路由
+
+```text
+公开
+├── GET  /api/system/state
+├── GET  /api/verify                    ★ Caddy Forward Auth（见 §10）
+├── POST /api/setup/begin
+├── POST /api/setup/passkey/options
+├── POST /api/setup/passkey/verify
+├── POST /api/register/begin            需 registration_enabled=1
+├── POST /api/register/passkey/options
+├── POST /api/register/passkey/verify
+├── POST /api/login/options
+├── POST /api/login/verify
+└── POST /api/logout
+
+用户（sid + active）
+├── GET    /api/me
+├── GET    /api/me/passkeys
+├── POST   /api/me/passkeys/options
+├── POST   /api/me/passkeys/verify
+└── DELETE /api/me/passkeys/:id         至少保留 1 个
+
+管理员（sid + role=admin）
+├── GET    /api/admin/config
+├── PATCH  /api/admin/config            仅 registrationEnabled
+├── GET    /api/admin/users?status=
+├── PATCH  /api/admin/users/:id           { "status": "active"|"disabled" }
+├── DELETE /api/admin/users/:id         仅 pending
+├── DELETE /api/admin/users/:id/passkeys/:pkId
+├── GET    /api/admin/audit-logs
+└── POST   /api/admin/system/reset
+
+静态：/* → ASSETS（SPA）
+页面：/setup · /login · /register · /admin/*
+```
+
+### GET /api/system/state
+
+```json
+{
+  "state": "ACTIVE",
+  "registrationEnabled": false
+}
+```
+
+---
+
+## 10. Forward Auth：`GET /api/verify`
+
+Caddy 将**原始请求的 Cookie** 转发到此端点。
+
+**逻辑**
+
+```typescript
+async function verify(c: Context) {
+  const session = await resolveSession(c); // 读 sid，验 HMAC，查 D1
+  if (!session) return c.body(null, 401);
+  if (session.user.status !== 'active') return c.body(null, 401);
+
+  return c.body(null, 200, {
+    'X-Auth-User-Id': session.user.id,
+    'X-Auth-User-Email': session.user.email,
+    'X-Auth-User-Name': session.user.name,
+    'X-Auth-User-Role': session.user.role,
+  });
+}
+```
+
+| 响应 | 含义 |
+|------|------|
+| `200` | 已登录且已审批，Caddy 放行 |
+| `401` | 未登录 / pending / disabled / session 过期 |
+
+**注意**：仅 GET；不做 302（跳转由 Caddy 配置）。
+
+---
+
+## 11. 登录与 return_to
+
+### 登录页 `/login`
+
+Query：`return_to`（可选），示例：
+
+```text
+https://auth.xxx.com/login?return_to=https://app.xxx.com/dashboard
+```
+
+**return_to 白名单**（防 open redirect）：
+
+```typescript
+function isAllowedReturnTo(url: string, env: Env): boolean {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'https:') return false;
+    // hostname === xxx.com 或 *.xxx.com
+    const base = env.RP_ID; // xxx.com
+    return u.hostname === base || u.hostname.endsWith('.' + base);
+  } catch {
+    return false;
+  }
+}
+```
+
+登录成功（`POST /api/login/verify`）：
+
+1. 校验用户 `status === 'active'`
+2. 写 D1 session，Set-Cookie `sid`（`Domain=.xxx.com`）
+3. 若 `return_to` 合法 → `302` 到该 URL；否则 → `/admin` 或 `/`
+
+### 登录 UI（前端）
+
+```typescript
+// /login 页面
+async function handleLogin(returnTo: string | null) {
+  const opts = await fetch('/api/login/options', { method: 'POST' }).then(r => r.json());
+  const authResp = await startAuthentication({ optionsJSON: opts });
+  const res = await fetch('/api/login/verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...authResp, returnTo }),
+  });
+  if (res.redirected) window.location.href = res.url;
+  else if (res.ok) window.location.href = returnTo ?? '/admin';
+}
+```
+
+可选：Conditional UI（`mediation: 'conditional'`）在登录页自动提示 Passkey。
+
+---
+
+## 12. 核心业务流程
+
+### 12.1 Bootstrap（仅一次）
+
+```text
+NEEDS_SETUP → 访问任意页 → /setup
+
+POST /api/setup/begin { "name": "Alice" }
+  batch: 检查 state · 无既有 admin · INSERT admin(active) · INSERT setup session
+  Set-Cookie setup_sid
+
+POST /api/setup/passkey/options → KV challenge
+浏览器 credentials.create()
+POST /api/setup/passkey/verify
+  batch: INSERT passkey · state=ACTIVE · 删 setup session · INSERT normal session
+  Set-Cookie sid · Clear setup_sid
+→ /admin
+```
+
+此后 `/api/setup/*` 与 `/setup` 永久 403/redirect。
+
+### 12.2 普通用户注册（永远审批）
+
+```text
+前置: ACTIVE 且 registration_enabled=1
+
+POST /api/register/begin { "name", "email" }
+  INSERT users(status=pending) · 注册用临时 session cookie
+
+POST /api/register/passkey/options
+POST /api/register/passkey/verify
+  INSERT passkey · status 保持 pending · 清除临时 cookie
+→ 提示「等待管理员审批」
+
+管理员 PATCH /api/admin/users/:id { "status": "active" }
+→ 用户方可登录并通过 verify
+```
+
+**注册完成后不签发正式 `sid`**，避免 pending 用户持有会话。
+
+### 12.3 登录
+
+```text
+POST /api/login/options   → KV challenge（discoverable，无 allowCredentials）
+POST /api/login/verify    → 验 Passkey · 更新 counter
+  拒绝 pending/disabled
+  INSERT session · Set-Cookie sid Domain=.xxx.com
+  302 return_to（若合法）
+```
+
+### 12.4 登出
+
+```text
+POST /api/logout → DELETE session · Clear sid cookie
+```
+
+---
+
+## 13. Caddy 配置
+
+### 13.1 保护业务子域
+
+```caddyfile
+app.xxx.com {
+  forward_auth auth.xxx.com {
+    uri /api/verify
+    copy_headers X-Auth-User-Id X-Auth-User-Email X-Auth-User-Name X-Auth-User-Role
+  }
+
+  @anonymous not header X-Auth-User-Id *
+  handle @anonymous {
+    redir https://auth.xxx.com/login?return_to={scheme}://{host}{uri} 302
+  }
+
+  reverse_proxy 127.0.0.1:8080
+}
+```
+
+多子域复制 `app` → `admin` / `wiki` 等即可。
+
+### 13.2 公开路径（不鉴权）
+
+```caddyfile
+app.xxx.com {
+  handle /public/* {
+    reverse_proxy 127.0.0.1:8080
+  }
+
+  forward_auth auth.xxx.com {
+    uri /api/verify
+    copy_headers X-Auth-User-Id X-Auth-User-Email X-Auth-User-Name
+  }
+
+  @anonymous not header X-Auth-User-Id *
+  handle @anonymous {
+    redir https://auth.xxx.com/login?return_to={scheme}://{host}{uri} 302
+  }
+
+  handle {
+    reverse_proxy 127.0.0.1:8080
+  }
+}
+```
+
+### 13.3 auth.xxx.com
+
+```caddyfile
+auth.xxx.com {
+  reverse_proxy https://passkey-auth.<your-subdomain>.workers.dev
+  # 或 Cloudflare 直连 Worker 自定义域，无需 Caddy
+}
+```
+
+若 Worker 已绑自定义域 `auth.xxx.com`，业务 Caddy 只需能访问该 URL 做 forward_auth。
+
+---
+
+## 14. WebAuthn 配置
+
+```typescript
+const rpID = env.RP_ID;           // xxx.com
+const expectedOrigin = env.ORIGIN; // https://auth.xxx.com
+
+// 注册（setup / register / 追加 passkey）
+generateRegistrationOptions({
+  rpName: env.RP_NAME,
+  rpID,
+  userName: user.email,
+  userDisplayName: user.name,
+  userID: new TextEncoder().encode(user.id),
+  attestationType: 'none',
+  authenticatorSelection: {
+    residentKey: 'required',
+    userVerification: 'required',
+  },
+});
+
+// 登录
+generateAuthenticationOptions({
+  rpID,
+  userVerification: 'required',
+  // 不传 allowCredentials → 可发现凭证，无需输入用户名
+});
+```
+
+在 `auth.xxx.com` 注册一次 Passkey 后，凭证绑定 `rpId=xxx.com`，与「全站子域共用 auth」模型一致。
+
+---
+
+## 15. 管理员功能
+
+### 配置
+
+```typescript
+// PATCH /api/admin/config
+{ "registrationEnabled": true }
+// 无 requireApproval 字段——永远审批
+```
+
+### 用户管理
+
+| 操作 | API |
+|------|-----|
+| 审批 | `PATCH /api/admin/users/:id` `{ "status": "active" }` |
+| 禁用 | `PATCH` `{ "status": "disabled" }`（不可禁自己；不可禁最后一个 active admin） |
+| 拒绝 pending | `DELETE /api/admin/users/:id`（CASCADE passkeys） |
+
+禁用用户时 **DELETE 该用户全部 sessions**，verify 立即 401。
+
+### 系统重置
+
+```typescript
+POST /api/admin/system/reset
+{ "confirmation": "RESET_ALL_I_UNDERSTAND" }
+```
+
+D1 batch：审计 → 清 sessions/passkeys/users/audit → `state=NEEDS_SETUP` → Clear cookies。
+
+---
+
+## 16. 项目结构
+
+```text
+passkey-auth/
+├── wrangler.jsonc
+├── migrations/0001_init.sql
+├── src/
+│   ├── index.ts
+│   ├── lib/
+│   │   ├── session.ts       # Cookie Domain、HMAC、CRUD
+│   │   ├── challenge.ts     # KV
+│   │   ├── webauthn.ts
+│   │   ├── return-to.ts     # return_to 白名单
+│   │   ├── audit.ts
+│   │   └── csrf.ts
+│   ├── middleware/
+│   │   ├── session.ts
+│   │   ├── require-auth.ts
+│   │   └── require-admin.ts
+│   └── routes/
+│       ├── system.ts        # state + verify
+│       ├── setup.ts
+│       ├── register.ts
+│       ├── login.ts
+│       ├── me.ts
+│       └── admin.ts
+└── app/                     # SPA → dist/
+    ├── routes/setup.tsx
+    ├── routes/login.tsx     # 读取 ?return_to=
+    ├── routes/register.tsx
+    └── routes/admin/*
+```
+
+---
+
+## 17. 前端页面
+
+| 路径 | 条件 | 说明 |
+|------|------|------|
+| `/setup` | `NEEDS_SETUP` | 管理员 Passkey，完成后不再出现 |
+| `/login` | `ACTIVE` | Passkey 登录；支持 `?return_to=` |
+| `/register` | `ACTIVE` + 注册开启 | 注册后提示待审批 |
+| `/admin/*` | admin + active | 用户审批、注册开关、重置 |
+
+根路由 loader：
+
+```typescript
+const { state } = await fetch('/api/system/state').then(r => r.json());
+if (state === 'NEEDS_SETUP') redirect('/setup');
+if (state === 'ACTIVE' && path.startsWith('/setup')) redirect('/login');
+```
+
+---
+
+## 18. 安全清单
+
+| 项 | 做法 |
+|----|------|
+| 会话 | HttpOnly Cookie + D1；`Domain=.xxx.com` |
+| 审批 | 硬编码；verify/登录仅 `active` |
+| Challenge | KV 60s；verify 后 delete |
+| Passkey 重放 | 更新 `counter` |
+| Bootstrap 竞态 | D1 batch + 禁止重复 admin |
+| Setup/Register 隔离 | 独立路由 |
+| CSRF | SameSite=Lax + mutating 请求校验 Origin |
+| return_to | 仅 `https://*.xxx.com` |
+| 重置 | 确认字符串 + admin + Origin |
+| 禁用 | 删 sessions |
+| 最后 admin | disable 时拒绝 |
+| 子域 XSS | 仅信任可控子域共享 Cookie |
+
+---
+
+## 19. 本地开发与部署
+
+```bash
+npm install hono @simplewebauthn/server @simplewebauthn/browser drizzle-orm
+
+wrangler d1 create passkey-auth-db
+wrangler kv namespace create CHALLENGES
+
+wrangler d1 migrations apply passkey-auth-db --local
+wrangler d1 migrations apply passkey-auth-db --remote
+
+wrangler secret put SESSION_SECRET
+
+npm run build
+wrangler dev          # 本地 RP_ID=localhost
+wrangler deploy       # 绑定 auth.xxx.com 自定义域
+```
+
+**端到端验证顺序**
+
+1. Bootstrap → admin 登录
+2. `curl -b cookies auth.xxx.com/api/verify` → 200
+3. Caddy 保护测试子域 → 未登录跳 login → 登录后访问成功
+4. 开注册 → 用户 pending → verify 401 → 批准 → verify 200
+
+---
+
+## 20. 实现顺序
+
+| 步骤 | 内容 |
+|------|------|
+| 1 | wrangler + migration + Hono + ASSETS |
+| 2 | session（含 `COOKIE_DOMAIN`）+ challenge + webauthn |
+| 3 | Bootstrap 全流程 |
+| 4 | **`GET /api/verify`** + 登录/登出 + return_to |
+| 5 | 注册 + 永远 pending + 管理员审批 |
+| 6 | 管理后台 + 审计 |
+| 7 | Caddy 联调 `*.xxx.com` |
+| 8 | （可选）Turnstile、Rate Limiting |
+
+第 4 步完成后即可用 Caddy 对接子域。
+
+---
+
+## 21. 与 v2 / 旧版 v3 差异摘要
+
+| 项目 | 旧方案 | 本版 v3 |
+|------|--------|---------|
+| 子域接入 | OAuth / 未定义 | **Forward Auth + `.xxx.com` Cookie** |
+| RP_ID | `auth.xxx.com` | **`xxx.com`** |
+| 审批 | 可配置关闭 | **永远审批** |
+| verify API | 无 | **`GET /api/verify`** |
+| 登录跳转 | 无 | **`/login?return_to=`** |
+| 跨 apex | 讨论过 | **明确不做** |
+
+---
+
+## 22. 常见问题
+
+**Q：用户在 `app.xxx.com` 会直接弹 Passkey 吗？**  
+A：不会。先 302 到 `auth.xxx.com/login`，在 auth 页弹 Passkey。
+
+**Q：审批前用户能访问子域吗？**  
+A：不能。pending 用户无正式 sid；即使有，verify 也返回 401。
+
+**Q：还要 OAuth 吗？**  
+A：`*.xxx.com` 场景不需要。共享 Cookie + forward_auth 即可。
+
+**Q：每个子域要单独注册 Passkey 吗？**  
+A：不要。只在 auth 注册一次，全站有效。

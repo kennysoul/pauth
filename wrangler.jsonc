@@ -1,0 +1,44 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "passkey-auth",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-06-05",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "vars": {
+    "RP_ID": "localhost",
+    "RP_NAME": "Passkey Auth (Local)",
+    "ORIGIN": "http://localhost:8787",
+    "COOKIE_DOMAIN": "",
+    "AUTH_HOST": "localhost:8787",
+    "SESSION_TTL_SECONDS": "604800",
+    "SETUP_TTL_SECONDS": "600"
+  },
+
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "passkey-auth-db",
+      "database_id": "00000000-0000-0000-0000-000000000001",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  "kv_namespaces": [
+    {
+      "binding": "CHALLENGES",
+      "id": "00000000000000000000000000000001",
+      "preview_id": "00000000000000000000000000000001"
+    }
+  ],
+
+  "observability": {
+    "enabled": true
+  }
+}
