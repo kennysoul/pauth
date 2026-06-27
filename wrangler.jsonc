@@ -6,11 +6,11 @@
   "compatibility_flags": ["nodejs_compat"],
 
   "vars": {
-    "RP_ID": "localhost",
-    "RP_NAME": "Passkey Auth (Local)",
-    "ORIGIN": "http://localhost:8787",
-    "COOKIE_DOMAIN": "",
-    "AUTH_HOST": "localhost:8787",
+    "RP_ID": "cdnc.us",
+    "RP_NAME": "CDNC Auth",
+    "ORIGIN": "https://auth.cdnc.us",
+    "COOKIE_DOMAIN": ".cdnc.us",
+    "AUTH_HOST": "auth.cdnc.us",
     "SESSION_TTL_SECONDS": "604800",
     "SETUP_TTL_SECONDS": "600"
   },
@@ -25,7 +25,7 @@
     {
       "binding": "DB",
       "database_name": "passkey-auth-db",
-      "database_id": "00000000-0000-0000-0000-000000000001",
+      "database_id": "deb2ed6f-1d1d-409b-9921-339f741e764e",
       "migrations_dir": "migrations"
     }
   ],
@@ -33,8 +33,8 @@
   "kv_namespaces": [
     {
       "binding": "CHALLENGES",
-      "id": "00000000000000000000000000000001",
-      "preview_id": "00000000000000000000000000000001"
+      "id": "c87b548f744b43058e91ad9aef0229a7",
+      "preview_id": "c87b548f744b43058e91ad9aef0229a7"
     }
   ],
 
