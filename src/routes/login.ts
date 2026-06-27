@@ -57,10 +57,10 @@ loginRoutes.post('/verify', async (c) => {
     await writeAuditLog(c.env, user.id, 'LOGIN', user.id, null);
 
     const returnTo = sanitizeReturnTo(body.returnTo, c.env);
-    if (returnTo) {
-      return c.redirect(returnTo, 302);
-    }
-    return c.json({ ok: true, redirect: user.role === 'admin' ? '/admin' : '/login' });
+    return c.json({
+      ok: true,
+      redirect: returnTo ?? (user.role === 'admin' ? '/admin' : '/login'),
+    });
   } catch (e) {
     const message = e instanceof Error ? e.message : 'Authentication failed';
     return c.json({ error: message }, 400);
