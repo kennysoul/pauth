@@ -5,9 +5,12 @@
   "compatibility_date": "2025-06-05",
   "compatibility_flags": ["nodejs_compat"],
 
+  // Copy to wrangler.local.jsonc (gitignored) and fill in your values.
+  // Do not commit wrangler.local.jsonc.
+
   "vars": {
     "RP_ID": "example.com",
-    "RP_NAME": "Passkey Auth",
+    "RP_NAME": "My Auth",
     "ORIGIN": "https://auth.example.com",
     "COOKIE_DOMAIN": ".example.com",
     "AUTH_HOST": "auth.example.com",
@@ -26,7 +29,7 @@
     {
       "binding": "DB",
       "database_name": "passkey-auth-db",
-      "database_id": "<YOUR_D1_DATABASE_ID>",
+      "database_id": "00000000-0000-0000-0000-000000000000",
       "migrations_dir": "migrations"
     }
   ],
@@ -34,8 +37,8 @@
   "kv_namespaces": [
     {
       "binding": "CHALLENGES",
-      "id": "<YOUR_KV_NAMESPACE_ID>",
-      "preview_id": "<YOUR_KV_PREVIEW_ID>"
+      "id": "00000000000000000000000000000000",
+      "preview_id": "00000000000000000000000000000000"
     }
   ],
 

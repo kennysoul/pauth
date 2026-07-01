@@ -142,7 +142,7 @@ Cookie requirements:
 - `HttpOnly`
 - `Secure` (production)
 - `SameSite=Lax`
-- `Domain=.cdnc.us` (or equivalent parent domain)
+- `Domain=.example.com` (or equivalent parent domain)
 
 ---
 

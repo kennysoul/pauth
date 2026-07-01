@@ -8,14 +8,25 @@ Central Passkey authentication for `*.xxx.com` (v3).
 
 ## Local development
 
+1. Copy the local Wrangler config template and fill in your domain and Cloudflare resource IDs:
+
+```bash
+cp wrangler.local.jsonc.example wrangler.local.jsonc
+cp .dev.vars.example .dev.vars
+```
+
+Edit `wrangler.local.jsonc` (gitignored) with your values. Do **not** put real domains or resource IDs in `wrangler.jsonc`.
+
+2. Install, migrate, build, and run:
+
 ```bash
 npm install
 npm run db:migrate:local
 npm run build
-npx wrangler dev
+npm run dev
 ```
 
-Open http://localhost:8787
+Open `https://auth.<your-domain>/setup` (via your reverse proxy) or http://127.0.0.1:8787 for API-only smoke tests.
 
 **Passkey flows require a real browser** (Safari/Chrome with platform authenticator or security key).
 
@@ -161,9 +172,9 @@ npx wrangler d1 create passkey-auth-db
 npx wrangler kv namespace create CHALLENGES
 ```
 
-Copy the returned IDs into `wrangler.jsonc` (`database_id`, KV `id`).
+Copy the returned IDs into `wrangler.local.jsonc` (`database_id`, KV `id`). Keep `wrangler.jsonc` as placeholders only.
 
-Set production **vars** in `wrangler.jsonc` (or Cloudflare dashboard → Settings → Variables):
+Set production **vars** in `wrangler.local.jsonc` (or Cloudflare dashboard → Settings → Variables):
 
 | Var | Example |
 |-----|---------|
@@ -203,9 +214,9 @@ git push -u origin main
 2. Choose **Connect to Git** → authorize GitHub → select this repository
 3. Build settings:
    - **Build command:** `npm run build`
-   - **Deploy command:** `npx wrangler deploy`
+   - **Deploy command:** `npx wrangler deploy --config wrangler.local.jsonc`
    - **Root directory:** `/` (repo root)
-4. Ensure D1/KV bindings in `wrangler.jsonc` match the created resources (Wrangler reads them on deploy)
+4. Ensure D1/KV bindings in your deploy config (`wrangler.local.jsonc` or dashboard) match the created resources
 5. Add `SESSION_SECRET` under **Settings → Variables and Secrets**
 6. Save and deploy
 

@@ -8,7 +8,7 @@ This document provides a complete request/response JSON example set for the L1 +
 Base URL:
 
 ```text
-https://auth.cdnc.us
+https://auth.example.com
 ```
 
 ---
@@ -26,10 +26,10 @@ Request (gateway subrequest):
 
 ```http
 GET /api/verify HTTP/1.1
-Host: auth.cdnc.us
+Host: auth.example.com
 Cookie: sid=sid_abc.sig_xyz
 X-Forwarded-Proto: https
-X-Forwarded-Host: su.cdnc.us
+X-Forwarded-Host: app.example.com
 X-Forwarded-Uri: /app/home
 ```
 
@@ -55,7 +55,7 @@ Response:
 
 ```http
 HTTP/1.1 302 Found
-Location: https://auth.cdnc.us/login?return_to=https%3A%2F%2Fsu.cdnc.us%2Fapp%2Fhome
+Location: https://auth.example.com/login?return_to=https%3A%2F%2Fapp.example.com%2Fapp%2Fhome
 ```
 
 ### 1.3 Logged in but no L1 grant (`302`)
@@ -64,7 +64,7 @@ Response:
 
 ```http
 HTTP/1.1 302 Found
-Location: https://auth.cdnc.us/login?return_to=https%3A%2F%2Fsu.cdnc.us%2Fapp%2Fhome
+Location: https://auth.example.com/login?return_to=https%3A%2F%2Fapp.example.com%2Fapp%2Fhome
 ```
 
 Notes:
@@ -83,8 +83,8 @@ Purpose:
 ### 2.1 Request example
 
 ```http
-GET /api/l2/authorize?client_id=sumusic&redirect_uri=https%3A%2F%2Fsu.cdnc.us%2Fauth%2Fcallback&response_type=code&scope=openid%20profile&state=st_8d2f4b&nonce=n_01xy HTTP/1.1
-Host: auth.cdnc.us
+GET /api/l2/authorize?client_id=sumusic&redirect_uri=https%3A%2F%2Fapp.example.com%2Fauth%2Fcallback&response_type=code&scope=openid%20profile&state=st_8d2f4b&nonce=n_01xy HTTP/1.1
+Host: auth.example.com
 Cookie: sid=sid_abc.sig_xyz
 ```
 
@@ -92,14 +92,14 @@ Cookie: sid=sid_abc.sig_xyz
 
 ```http
 HTTP/1.1 302 Found
-Location: https://su.cdnc.us/auth/callback?code=ac_01JCODEABC&state=st_8d2f4b
+Location: https://app.example.com/auth/callback?code=ac_01JCODEABC&state=st_8d2f4b
 ```
 
 ### 2.3 Not logged in (`302` to login)
 
 ```http
 HTTP/1.1 302 Found
-Location: https://auth.cdnc.us/login?return_to=https%3A%2F%2Fauth.cdnc.us%2Fapi%2Fl2%2Fauthorize%3Fclient_id%3Dsumusic%26redirect_uri%3Dhttps%253A%252F%252Fsu.cdnc.us%252Fauth%252Fcallback%26response_type%3Dcode%26scope%3Dopenid%2520profile%26state%3Dst_8d2f4b%26nonce%3Dn_01xy
+Location: https://auth.example.com/login?return_to=https%3A%2F%2Fauth.example.com%2Fapi%2Fl2%2Fauthorize%3Fclient_id%3Dsumusic%26redirect_uri%3Dhttps%253A%252F%252Fapp.example.com%252Fauth%252Fcallback%26response_type%3Dcode%26scope%3Dopenid%2520profile%26state%3Dst_8d2f4b%26nonce%3Dn_01xy
 ```
 
 ### 2.4 Invalid client (`400`)
@@ -133,14 +133,14 @@ Location: https://auth.cdnc.us/login?return_to=https%3A%2F%2Fauth.cdnc.us%2Fapi%
 
 ```http
 HTTP/1.1 302 Found
-Location: https://su.cdnc.us/auth/callback?error=access_denied&error_description=user_not_granted_for_client&state=st_8d2f4b
+Location: https://app.example.com/auth/callback?error=access_denied&error_description=user_not_granted_for_client&state=st_8d2f4b
 ```
 
 ### 2.8 Client mode is `L1_AND_L2`, user has no L1 (`302`)
 
 ```http
 HTTP/1.1 302 Found
-Location: https://su.cdnc.us/auth/callback?error=access_denied&error_description=l1_required&state=st_8d2f4b
+Location: https://app.example.com/auth/callback?error=access_denied&error_description=l1_required&state=st_8d2f4b
 ```
 
 ---
@@ -164,7 +164,7 @@ grant_type=authorization_code&
 code=ac_01JCODEABC&
 client_id=sumusic&
 client_secret=sec_01JSECRET&
-redirect_uri=https%3A%2F%2Fsu.cdnc.us%2Fauth%2Fcallback
+redirect_uri=https%3A%2F%2Fapp.example.com%2Fauth%2Fcallback
 ```
 
 ### 3.2 Success (`200`)
@@ -261,7 +261,7 @@ Request:
 
 ```http
 GET /api/l2/userinfo HTTP/1.1
-Host: auth.cdnc.us
+Host: auth.example.com
 Authorization: Bearer at_01JATOKEN
 ```
 
@@ -312,9 +312,9 @@ Request:
   "name": "SuMusic",
   "accessMode": "L2_ONLY",
   "redirectUris": [
-    "https://su.cdnc.us/auth/callback",
-    "https://su1.cdnc.us/auth/callback",
-    "https://su2.cdnc.us/auth/callback"
+    "https://app.example.com/auth/callback",
+    "https://app1.example.com/auth/callback",
+    "https://app2.example.com/auth/callback"
   ],
   "enabled": true
 }
@@ -331,9 +331,9 @@ Success (`201`):
     "accessMode": "L2_ONLY",
     "enabled": true,
     "redirectUris": [
-      "https://su.cdnc.us/auth/callback",
-      "https://su1.cdnc.us/auth/callback",
-      "https://su2.cdnc.us/auth/callback"
+      "https://app.example.com/auth/callback",
+      "https://app1.example.com/auth/callback",
+      "https://app2.example.com/auth/callback"
     ]
   }
 }
@@ -397,9 +397,9 @@ Success (`200`):
     "accessMode": "L1_AND_L2",
     "enabled": true,
     "redirectUris": [
-      "https://su.cdnc.us/auth/callback",
-      "https://su1.cdnc.us/auth/callback",
-      "https://su2.cdnc.us/auth/callback"
+      "https://app.example.com/auth/callback",
+      "https://app1.example.com/auth/callback",
+      "https://app2.example.com/auth/callback"
     ]
   }
 ]

@@ -10,7 +10,7 @@ info:
     - Admin: client and grant management (`/api/admin/*`)
 
 servers:
-  - url: https://auth.cdnc.us
+  - url: https://auth.example.com
     description: Production
 
 tags:
