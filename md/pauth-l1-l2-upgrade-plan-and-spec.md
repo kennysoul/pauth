@@ -144,9 +144,13 @@ Admin UI pages: **用户管理** (incl. open registration), **应用管理**, **
 
 ### 3.5 Deploy tooling
 
-Script `scripts/deploy-cloudflare.sh` (`npm run deploy:bootstrap`):
+Script `scripts/deploy-cloudflare.sh` (`npm run deploy:bootstrap`) — full bootstrap.
 
-- Provisions D1 + KV; writes `wrangler.local.jsonc` and optionally `wrangler.production.jsonc`
+Script `scripts/provision-cloudflare.sh` (`npm run provision:cloudflare`) — **upper half only** (D1/KV + wrangler configs); pair with [Deploy to Cloudflare](https://developers.cloudflare.com/workers/platform/deploy-buttons/) badge + `npm run deploy:workers`.
+
+Shared logic: `scripts/lib/deploy-common.sh`.
+
+- Provisions D1 + KV; writes `wrangler.local.jsonc`, `wrangler.production.jsonc`, and `wrangler.jsonc`
 - Config merge on upgrade: keep / merge-bindings / overwrite
 - Deploy modes: **local** (`wrangler deploy`) or **git** (prepare Cloudflare Builds)
 - Auto-binds `AUTH_HOST` Custom Domain when zone is on the account (`scripts/lib/bind-custom-domain.py`)

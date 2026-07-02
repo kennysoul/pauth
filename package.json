@@ -11,10 +11,21 @@
     "dev": "npm run build:app && wrangler dev --config wrangler.local.jsonc",
     "dev:app": "vite build --watch",
     "deploy": "npm run build && wrangler deploy --config wrangler.local.jsonc",
+    "deploy:workers": "npm run db:migrate:remote:workers && wrangler deploy --config wrangler.jsonc",
+    "deploy:production": "npm run db:migrate:remote:workers && wrangler deploy --config wrangler.production.jsonc",
     "deploy:bootstrap": "bash scripts/deploy-cloudflare.sh",
-    "db:migrate:local": "wrangler d1 migrations apply passkey-auth-db --local --config wrangler.local.jsonc",
-    "db:migrate:remote": "wrangler d1 migrations apply passkey-auth-db --remote --config wrangler.local.jsonc",
+    "provision:cloudflare": "bash scripts/provision-cloudflare.sh",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local --config wrangler.local.jsonc",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote --config wrangler.local.jsonc",
+    "db:migrate:remote:workers": "wrangler d1 migrations apply DB --remote --config wrangler.jsonc",
     "types": "wrangler types"
+  },
+  "cloudflare": {
+    "bindings": {
+      "SESSION_SECRET": {
+        "description": "Cookie signing secret. Generate with `openssl rand -base64 32` (min 32 chars)."
+      }
+    }
   },
   "dependencies": {
     "@simplewebauthn/browser": "^13.1.0",

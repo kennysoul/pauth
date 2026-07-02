@@ -190,29 +190,112 @@ curl -sk -o /dev/null -w "%{http_code} -> %{redirect_url}\n" \
 
 ## Deploy to Cloudflare
 
-Recommended: use the bootstrap script (`npm run deploy:bootstrap`). It creates D1 + KV, writes wrangler config, uploads `SESSION_SECRET`, runs migrations, deploys (local mode), and **auto-binds** `AUTH_HOST` as a Worker Custom Domain.
+Three ways to deploy — pick one:
 
-### Bootstrap script
+| Method | Best for |
+|--------|----------|
+| **[Deploy to Cloudflare](#deploy-to-cloudflare-badge)** badge + provision script | Fork on GitHub, CI deploy via Workers Builds |
+| **Bootstrap script** (`deploy-cloudflare.sh`) | One-shot local deploy to your domain |
+| **Manual** | Existing checkout, full control |
+
+### Deploy to Cloudflare badge
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/kennysoul/pauth)
+
+**Flow:** badge creates your GitHub fork + Workers Builds project → **provision script** creates D1/KV and writes real IDs into `wrangler.jsonc` → push → Builds runs `npm run deploy:workers`.
+
+#### Step 1 — Click the badge
+
+Connect your GitHub account. Cloudflare forks the repo and sets up Workers Builds. Use these build settings:
+
+| Field | Value |
+|-------|--------|
+| Build command | `npm run build` |
+| Deploy command | `npm run deploy:workers` |
+
+Do **not** rely on the badge alone for D1/KV with your domain vars — run Step 2.
+
+#### Step 2 — Provision resources (upper half of bootstrap)
+
+On your machine (Node 20+, `npx wrangler login`):
+
+```bash
+git clone https://github.com/YOUR_USER/pauth.git
+cd pauth
+
+# Resources only — no build/deploy
+curl -fsSL https://raw.githubusercontent.com/kennysoul/pauth/main/scripts/provision-cloudflare.sh -o provision.sh
+chmod +x provision.sh
+./provision.sh --dir . --skip-clone --zone kass.cc --auth-host auth.kass.cc --yes
+```
+
+This creates D1 + KV, writes `wrangler.jsonc`, `wrangler.production.jsonc`, `wrangler.local.jsonc`, and `.dev.vars`.
+
+#### Step 3 — Push config + set secret
+
+```bash
+git add wrangler.jsonc wrangler.production.jsonc
+git commit -m "Configure Cloudflare D1/KV and domain vars"
+git push
+```
+
+In Cloudflare Dashboard → Worker → **Settings → Variables and Secrets** → add `SESSION_SECRET` (copy from `.dev.vars`; do not commit `.dev.vars`).
+
+Workers Builds will run migrate + deploy on push.
+
+#### Step 4 — Bind domain + setup
+
+After the first successful Build, bind the auth hostname and upload the secret if not done in Dashboard:
+
+```bash
+./scripts/deploy-cloudflare.sh --dir . --skip-clone --zone kass.cc --auth-host auth.kass.cc --yes --config-policy keep
+```
+
+(`--config-policy keep` skips rewriting wrangler files; script uploads `SESSION_SECRET`, runs migrate, deploy, and binds `AUTH_HOST`.)
+
+Visit `https://auth.kass.cc/setup` and register the **root** admin Passkey.
+
+---
+
+### Bootstrap script (full local deploy)
+
+Recommended for a private machine one-shot deploy: creates D1 + KV, config, build, migrate, deploy, and auto-binds `AUTH_HOST`.
+
+**Single-file download** (fetches shared library if needed; clones repo):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kennysoul/pauth/main/scripts/deploy-cloudflare.sh -o bootstrap-pauth.sh
+chmod +x bootstrap-pauth.sh
+npx wrangler login
+./bootstrap-pauth.sh --zone kass.cc --auth-host auth.kass.cc --yes
+```
+
+**From repo:**
 
 ```bash
 npm run deploy:bootstrap
+# or provision only:
+npm run provision:cloudflare -- --dir . --skip-clone --zone kass.cc --yes
 
 # Non-interactive — local deploy
 ./scripts/deploy-cloudflare.sh --zone kass.cc --auth-host auth.kass.cc --dir ~/pauth --yes
 
-# Git mode — generate wrangler.production.jsonc for Cloudflare Builds
+# Git mode — generate wrangler.production.jsonc + wrangler.jsonc for Builds
 ./scripts/deploy-cloudflare.sh --zone kass.cc --deploy-mode git --config-policy merge-bindings --yes
 
 # Upgrade — keep existing wrangler config unchanged
 ./scripts/deploy-cloudflare.sh --dir ~/pauth --skip-clone --config-policy keep --yes
 ```
 
+Still required: Node.js 20+, git, python3, curl, and Cloudflare auth.
+
 **Wrangler config files**
 
 | File | Purpose | Git |
 |------|---------|-----|
+| `wrangler.jsonc` | Deploy badge / Workers Builds (`npm run deploy:workers`) | commit after provision |
 | `wrangler.local.jsonc` | Local `wrangler deploy` / dev | gitignored |
-| `wrangler.production.jsonc` | Cloudflare Git Builds CI | commit to private repo |
+| `wrangler.production.jsonc` | Cloudflare Git Builds (private fork) | commit after provision |
 
 When a config file already exists, the script prompts: **保留** / **仅同步 D1/KV** / **完全覆盖**.
 
@@ -224,9 +307,10 @@ After `--deploy-mode git`:
 
 1. Install [Cloudflare Workers & Pages GitHub App](https://developers.cloudflare.com/workers/ci-cd/builds/git-integration/github-integration/) on your private repo
 2. Dashboard → Worker → Settings → Builds → Connect to Git
-3. **Build:** `npm run build` · **Deploy:** `npx wrangler deploy --config wrangler.production.jsonc`
-4. Commit `wrangler.production.jsonc` to the repo; keep `SESSION_SECRET` in Cloudflare Secrets only
-5. Run `npm run db:migrate:remote` manually after schema migrations
+3. **Build:** `npm run build` · **Deploy:** `npm run deploy:workers`
+4. Commit `wrangler.jsonc` + `wrangler.production.jsonc` after running `provision-cloudflare.sh`
+5. Keep `SESSION_SECRET` in Cloudflare Secrets only (from `.dev.vars` after provision)
+6. `deploy:workers` includes remote D1 migrations
 
 See `wrangler.production.jsonc.example`.
 
