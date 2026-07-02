@@ -150,8 +150,7 @@ check_workers_routes_write_permission() {
   local text="${WRANGLER_WHOAMI:-}"
   [[ -n "$text" ]] || return 1
 
-  if printf '%s' "$text" | grep -qiE 'workers[_ ]routes[^
-]*\(write\)|workers_routes:write'; then
+  if printf '%s' "$text" | grep -qiE 'workers[_ ]routes[^)]*\(write\)|workers_routes:write'; then
     ok "Workers Routes 写权限"
     return 0
   fi
@@ -517,9 +516,9 @@ apply_resolve_json() {
     KV_TITLE="$(printf '%s' "$json" | python3 -c "import json,sys; print(json.load(sys.stdin)['kv_title'])")"
   fi
   PAUTH_DEPLOY_MODE="$(printf '%s' "$json" | python3 -c "import json,sys; print(json.load(sys.stdin)['mode'])")"
-  D1_ID="$(printf '%s' "$json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('d1_id',''))")"
-  KV_ID="$(printf '%s' "$json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('kv_id',''))")"
-  KV_PREVIEW_ID="$(printf '%s' "$json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('kv_preview_id',''))")"
+  D1_ID="$(sanitize_cloudflare_id "$(printf '%s' "$json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('d1_id',''))")")"
+  KV_ID="$(sanitize_cloudflare_id "$(printf '%s' "$json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('kv_id',''))")")"
+  KV_PREVIEW_ID="$(sanitize_cloudflare_id "$(printf '%s' "$json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('kv_preview_id',''))")")"
   CONFIG_POLICY="${CONFIG_POLICY:-merge-bindings}"
   if [[ "$PAUTH_DEPLOY_MODE" == "upgrade" ]]; then
     info "升级已有部署 · Worker=${WORKER_NAME}"
@@ -1070,18 +1069,37 @@ print(m.group(1) if m else '')
 
   phase "Cloudflare 资源 · D1 / KV"
 
-  D1_ID="$(find_d1_id || true)"
-  if [[ -z "$D1_ID" ]]; then create_d1; D1_ID="$(find_d1_id)"; fi
+  D1_ID="$(sanitize_cloudflare_id "$D1_ID")"
+  if [[ -z "$D1_ID" ]]; then
+    D1_ID="$(sanitize_cloudflare_id "$(find_d1_id || true)")"
+  fi
+  if [[ -z "$D1_ID" ]]; then
+    create_d1
+    D1_ID="$(sanitize_cloudflare_id "$(find_d1_id)")"
+  fi
   [[ -n "$D1_ID" ]] || die "无法获取 D1 id"
-  info "D1: $D1_NAME → $D1_ID"
 
-  KV_ID="${KV_ID:-$(find_kv_id "$KV_TITLE" || true)}"
-  [[ -z "$KV_ID" ]] && KV_ID="$(create_kv "$KV_TITLE")"
-  KV_PREVIEW_ID="${KV_PREVIEW_ID:-$(find_kv_id "$KV_TITLE" 1 || true)}"
-  [[ -z "$KV_PREVIEW_ID" ]] && KV_PREVIEW_ID="$(create_kv "$KV_TITLE" --preview)"
-  info "KV: $KV_TITLE → $KV_ID"
+  KV_ID="$(sanitize_cloudflare_id "$KV_ID")"
+  if [[ -z "$KV_ID" ]]; then
+    KV_ID="$(sanitize_cloudflare_id "$(find_kv_id "$KV_TITLE" || true)")"
+  fi
+  if [[ -z "$KV_ID" ]]; then
+    KV_ID="$(sanitize_cloudflare_id "$(create_kv "$KV_TITLE")")"
+  fi
+  [[ -n "$KV_ID" ]] || die "无法获取 KV id"
+
+  KV_PREVIEW_ID="$(sanitize_cloudflare_id "$KV_PREVIEW_ID")"
+  if [[ -z "$KV_PREVIEW_ID" ]]; then
+    KV_PREVIEW_ID="$(sanitize_cloudflare_id "$(find_kv_id "$KV_TITLE" 1 || true)")"
+  fi
+  if [[ -z "$KV_PREVIEW_ID" ]]; then
+    KV_PREVIEW_ID="$(sanitize_cloudflare_id "$(create_kv "$KV_TITLE" --preview)")"
+  fi
+  [[ -n "$KV_PREVIEW_ID" ]] || die "无法获取 KV preview id"
 
   validate_resource_ids
+  info "D1: $D1_NAME → $D1_ID"
+  info "KV: $KV_TITLE → $KV_ID"
 
   phase "Wrangler 配置"
 
