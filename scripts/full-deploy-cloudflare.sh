@@ -2,12 +2,12 @@
 # pauth · Cloudflare 一键部署（单文件）
 #
 # 执行顺序：
-#   预检 1/3  本机工具（node / git / curl …）
+#   预检 1/3  本机工具（node / git …）
 #   预检 2/3  Cloudflare 登录与 API 权限
-#   预检 3/3  GitHub 仓库 + lib helper 可下载到临时目录
-#   全部通过后才开始 clone / D1 / KV / 部署
+#   预检 3/3  Git 验证 GitHub 仓库 → clone/pull 源码 → 使用仓库内 scripts/lib
+#   全部通过后继续 D1 / KV / 部署
 #
-# 单文件下载即可运行；Python helper 在预检阶段从 GitHub 拉到临时目录。
+# 单文件下载即可运行；私有仓库在预检 3 会引导 GitHub 登录（gh auth login）。
 #
 #   curl -fsSL https://raw.githubusercontent.com/kennysoul/pauth/main/scripts/full-deploy-cloudflare.sh -o full-deploy.sh
 #   chmod +x full-deploy.sh
@@ -47,10 +47,10 @@ ROTATE_SECRET=0
 GIT_FIRST_DEPLOY=0
 SKIP_DOMAIN_BIND=0
 
-HELPER_DIR=""
 CONFIG_PY=""
 BIND_DOMAIN_PY=""
 WRANGLER_WHOAMI=""
+GIT_SOURCE_READY=0
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -70,9 +70,9 @@ usage() {
   cat <<'EOF'
 Usage: full-deploy-cloudflare.sh [options]
 
-单文件 Cloudflare 全量部署。预检通过后才执行 clone / D1 / KV / build / deploy。
+单文件 Cloudflare 全量部署。预检通过后才执行 D1 / KV / build / deploy。
 
-预检顺序：本机工具 → Cloudflare 权限 → GitHub 可达 + lib 下载
+预检顺序：本机工具 → Cloudflare 权限 → Git 拉取源码（含 scripts/lib）
 
 Options:
   --repo URL              GitHub 仓库（默认 kennysoul/pauth）
@@ -99,13 +99,118 @@ Options:
   CLOUDFLARE_API_TOKEN      推荐：User/Account API Token
   CLOUDFLARE_ACCOUNT_ID     可选；未设时从 wrangler whoami 解析
 
+私有仓库：预检 3 会引导 gh auth login；非交互模式请先完成 GitHub 登录。
+
 示例：
   ./full-deploy.sh --zone kass.cc --auth-host auth.kass.cc --yes --config-policy keep
 EOF
 }
 
-cleanup_helpers() {
-  [[ -n "$HELPER_DIR" && -d "$HELPER_DIR" ]] && rm -rf "$HELPER_DIR"
+git_ls_remote_ok() {
+  git ls-remote --exit-code "$REPO_URL" "refs/heads/$GIT_BRANCH" >/dev/null 2>&1
+}
+
+git_auth_failure_hint() {
+  local err="$1"
+  [[ "$err" =~ [Aa]uthentication\ failed ]] && return 0
+  [[ "$err" =~ [Pp]ermission\ (denied|to) ]] && return 0
+  [[ "$err" =~ [Uu]sername ]] && return 0
+  [[ "$err" =~ [Rr]epository\ not\ found ]] && return 0
+  [[ "$err" =~ [Ii]nvalid\ username\ or\ password ]] && return 0
+  [[ "$err" =~ [Tt]erminal\ is\ dumb ]] && return 0
+  [[ "$err" =~ [Ss]upport\ for\ password\ authentication\ was\ removed ]] && return 0
+  return 1
+}
+
+prompt_github_auth() {
+  local err="${1:-}"
+  echo ""
+  warn "无法访问 Git 仓库: $REPO_URL ($GIT_BRANCH)"
+  if [[ -n "$err" ]]; then
+    echo "$err" | sed 's/^/    /'
+  fi
+  echo ""
+  echo "私有仓库需先完成 GitHub 授权，可选："
+  echo "  1) gh auth login（推荐，GitHub CLI）"
+  echo "  2) 改用 SSH 地址: git@github.com:owner/repo.git（--repo）"
+  echo "  3) 配置 HTTPS token（git credential / GITHUB_TOKEN）"
+  echo ""
+
+  if command -v gh >/dev/null 2>&1; then
+    read -r -p "是否现在运行 gh auth login？[Y/n]: " run_gh
+    if [[ "${run_gh:-Y}" =~ ^[Yy]$ ]]; then
+      gh auth login || die "gh auth login 失败"
+      gh auth setup-git 2>/dev/null || true
+      return 0
+    fi
+  else
+    warn "未检测到 gh（GitHub CLI）。macOS: brew install gh"
+  fi
+
+  read -r -p "完成授权后按回车重试…"
+}
+
+ensure_github_git_access() {
+  local err="" attempt=0
+  while [[ "$attempt" -lt 3 ]]; do
+    if git_ls_remote_ok; then
+      ok "git ls-remote · $REPO_URL ($GIT_BRANCH)"
+      return 0
+    fi
+    err="$(git ls-remote "$REPO_URL" "refs/heads/$GIT_BRANCH" 2>&1)" || true
+    if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+      if git_auth_failure_hint "$err"; then
+        die "无法访问私有仓库。请先执行: gh auth login（或配置 SSH/token），然后重试。"
+      fi
+      die "无法访问 GitHub 仓库/分支: $REPO_URL ($GIT_BRANCH)\n${err}"
+    fi
+    prompt_github_auth "$err"
+    attempt=$((attempt + 1))
+  done
+  die "多次重试仍无法访问: $REPO_URL ($GIT_BRANCH)"
+}
+
+activate_repo_helpers() {
+  local lib_dir="$INSTALL_DIR/scripts/lib"
+  CONFIG_PY="$lib_dir/wrangler-config.py"
+  BIND_DOMAIN_PY="$lib_dir/bind-custom-domain.py"
+  [[ -f "$CONFIG_PY" && -f "$BIND_DOMAIN_PY" ]] \
+    || die "仓库缺少 helper: $lib_dir/{wrangler-config.py,bind-custom-domain.py}"
+  chmod +x "$CONFIG_PY" "$BIND_DOMAIN_PY" 2>/dev/null || true
+  python3 "$CONFIG_PY" --help >/dev/null 2>&1 || die "wrangler-config.py 无法运行"
+  python3 "$BIND_DOMAIN_PY" --help >/dev/null 2>&1 || die "bind-custom-domain.py 无法运行"
+  ok "helper · $lib_dir"
+}
+
+sync_source_repo() {
+  if [[ "$SKIP_CLONE" -eq 1 ]]; then
+    INSTALL_DIR="$(cd "$INSTALL_DIR" && pwd)"
+    [[ -f "$INSTALL_DIR/package.json" ]] || die "无效目录（缺少 package.json）: $INSTALL_DIR"
+    info "使用已有 checkout: $INSTALL_DIR"
+    if [[ -d "$INSTALL_DIR/.git" ]]; then
+      ensure_github_git_access
+      git -C "$INSTALL_DIR" fetch origin "$GIT_BRANCH"
+      git -C "$INSTALL_DIR" checkout "$GIT_BRANCH"
+      git -C "$INSTALL_DIR" pull --ff-only origin "$GIT_BRANCH"
+      ok "git pull · $GIT_BRANCH"
+    fi
+  else
+    ensure_github_git_access
+    if [[ -d "$INSTALL_DIR/.git" ]]; then
+      info "更新已有仓库: $INSTALL_DIR"
+      git -C "$INSTALL_DIR" fetch origin "$GIT_BRANCH"
+      git -C "$INSTALL_DIR" checkout "$GIT_BRANCH"
+      git -C "$INSTALL_DIR" pull --ff-only origin "$GIT_BRANCH"
+    else
+      info "克隆仓库 → $INSTALL_DIR"
+      mkdir -p "$(dirname "$INSTALL_DIR")"
+      git clone --branch "$GIT_BRANCH" --depth 1 "$REPO_URL" "$INSTALL_DIR"
+    fi
+    INSTALL_DIR="$(cd "$INSTALL_DIR" && pwd)"
+    ok "源码 · $INSTALL_DIR"
+  fi
+  activate_repo_helpers
+  GIT_SOURCE_READY=1
 }
 
 # ── 参数 ──────────────────────────────────────────────────────────────────────
@@ -137,14 +242,11 @@ parse_args() {
   done
 }
 
-github_raw_lib_base() {
-  local url="$1" branch="$2" owner="" repo=""
-  if [[ "$url" =~ github\.com[:/]+([^/]+)/([^/.]+)(\.git)?$ ]]; then
-    owner="${BASH_REMATCH[1]}"
-    repo="${BASH_REMATCH[2]}"
-    printf 'https://raw.githubusercontent.com/%s/%s/%s/scripts/lib' "$owner" "$repo" "$branch"
+github_repo_label() {
+  if [[ "$REPO_URL" =~ github\.com[:/]+([^/]+)/([^/.]+) ]]; then
+    printf '%s/%s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
   else
-    die "仅支持 GitHub 仓库 URL（当前: $url）"
+    printf '%s' "$REPO_URL"
   fi
 }
 
@@ -153,7 +255,7 @@ github_raw_lib_base() {
 preflight_check_tools() {
   phase "预检 1/3 · 本机工具"
   local missing=()
-  for cmd in node npm npx git python3 curl; do
+  for cmd in node npm npx git python3; do
     if command -v "$cmd" >/dev/null 2>&1; then
       ok "$cmd"
     else
@@ -348,53 +450,22 @@ PY
   ok "Cloudflare 预检通过"
 }
 
-# ── 预检 3/3：GitHub + lib 下载 ───────────────────────────────────────────────
+# ── 预检 3/3：Git 验证 + 拉取源码 + helper ───────────────────────────────────
 
 preflight_check_github() {
-  phase "预检 3/3 · GitHub 可达 + lib helper"
+  phase "预检 3/3 · Git 仓库与源码"
 
-  local lib_base
-  lib_base="$(github_raw_lib_base "$REPO_URL" "$GIT_BRANCH")"
-
-  info "检查 Git 仓库: $REPO_URL ($GIT_BRANCH)"
-  if ! git ls-remote --exit-code "$REPO_URL" "refs/heads/$GIT_BRANCH" >/dev/null 2>&1; then
-    die "无法访问 GitHub 仓库/分支: $REPO_URL ($GIT_BRANCH)"
+  if [[ ! "$REPO_URL" =~ github\.com ]]; then
+    die "仅支持 GitHub 仓库 URL（当前: $REPO_URL）"
   fi
-  ok "git ls-remote"
 
-  HELPER_DIR="${TMPDIR:-/tmp}/pauth-deploy-$$"
-  mkdir -p "$HELPER_DIR/lib"
-  trap cleanup_helpers EXIT
-
-  local files=(wrangler-config.py bind-custom-domain.py)
-  for f in "${files[@]}"; do
-    info "下载 $f"
-    if ! curl -fsSL "${lib_base}/${f}" -o "$HELPER_DIR/lib/$f"; then
-      die "无法下载 ${lib_base}/${f}"
-    fi
-    [[ -s "$HELPER_DIR/lib/$f" ]] || die "下载为空: $f"
-    head -1 "$HELPER_DIR/lib/$f" | grep -q '^#!' || die "下载内容异常: $f（不是有效脚本）"
-    chmod +x "$HELPER_DIR/lib/$f"
-    ok "$f → $HELPER_DIR/lib/$f"
-  done
-
-  CONFIG_PY="$HELPER_DIR/lib/wrangler-config.py"
-  BIND_DOMAIN_PY="$HELPER_DIR/lib/bind-custom-domain.py"
-
-  info "验证 helper 可执行"
-  python3 "$CONFIG_PY" --help >/dev/null 2>&1 || die "wrangler-config.py 无法运行"
-  python3 "$BIND_DOMAIN_PY" --help >/dev/null 2>&1 || die "bind-custom-domain.py 无法运行"
-  ok "Python helper 可用"
-
+  info "仓库: $(github_repo_label) · 分支: $GIT_BRANCH · 目录: $INSTALL_DIR"
+  sync_source_repo
   ok "GitHub 预检通过"
 }
 
-refresh_helpers_from_install_dir() {
-  if [[ -f "$INSTALL_DIR/scripts/lib/wrangler-config.py" && -f "$INSTALL_DIR/scripts/lib/bind-custom-domain.py" ]]; then
-    CONFIG_PY="$INSTALL_DIR/scripts/lib/wrangler-config.py"
-    BIND_DOMAIN_PY="$INSTALL_DIR/scripts/lib/bind-custom-domain.py"
-    info "使用仓库内 helper: $INSTALL_DIR/scripts/lib/"
-  fi
+use_repo_helpers() {
+  [[ "$GIT_SOURCE_READY" -eq 1 ]] || activate_repo_helpers
 }
 
 # ── Wrangler 配置 ─────────────────────────────────────────────────────────────
@@ -578,24 +649,10 @@ print_finish() {
 # ── 主流程：clone / 资源 / 部署 ───────────────────────────────────────────────
 
 run_provision() {
-  phase "开始部署 · 获取源码"
+  phase "Cloudflare 资源配置"
 
-  if [[ "$SKIP_CLONE" -eq 1 ]]; then
-    INSTALL_DIR="$(cd "$INSTALL_DIR" && pwd)"
-    [[ -f "$INSTALL_DIR/package.json" ]] || die "无效目录: $INSTALL_DIR"
-  else
-    if [[ -d "$INSTALL_DIR/.git" ]]; then
-      git -C "$INSTALL_DIR" fetch origin "$GIT_BRANCH"
-      git -C "$INSTALL_DIR" checkout "$GIT_BRANCH"
-      git -C "$INSTALL_DIR" pull --ff-only origin "$GIT_BRANCH"
-    else
-      mkdir -p "$(dirname "$INSTALL_DIR")"
-      git clone --branch "$GIT_BRANCH" --depth 1 "$REPO_URL" "$INSTALL_DIR"
-    fi
-    INSTALL_DIR="$(cd "$INSTALL_DIR" && pwd)"
-  fi
-  ok "源码: $INSTALL_DIR"
-  refresh_helpers_from_install_dir
+  [[ "$GIT_SOURCE_READY" -eq 1 ]] || die "内部错误: 源码未在预检阶段就绪"
+  use_repo_helpers
 
   WRANGLER_LOCAL="$INSTALL_DIR/wrangler.local.jsonc"
   WRANGLER_PROD="$INSTALL_DIR/wrangler.production.jsonc"
