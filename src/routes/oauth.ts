@@ -493,6 +493,24 @@ export async function buildOAuthUserFields(
 ) {
   const googleLinked = await getOAuthIdentityForUser(env, user.id, 'google');
   const msLinked = await getOAuthIdentityForUser(env, user.id, 'microsoft');
+  return buildOAuthUserFieldsSync(
+    user,
+    passkeyCount,
+    googleEnabled,
+    microsoftEnabled,
+    googleLinked,
+    msLinked,
+  );
+}
+
+export function buildOAuthUserFieldsSync(
+  user: User & { allowedGoogleEmail?: string; allowedMicrosoftEmail?: string },
+  passkeyCount: number,
+  googleEnabled: boolean,
+  microsoftEnabled: boolean,
+  googleLinked: Awaited<ReturnType<typeof getOAuthIdentityForUser>>,
+  msLinked: Awaited<ReturnType<typeof getOAuthIdentityForUser>>,
+) {
   const hasPasskey = passkeyCount > 0;
   return {
     googleEnabled,

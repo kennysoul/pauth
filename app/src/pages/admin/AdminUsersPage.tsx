@@ -52,6 +52,7 @@ export function AdminUsersPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [me, setMe] = useState<Me | null>(null);
   const [users, setUsers] = useState<AdminUser[]>([]);
+  const [usersLoading, setUsersLoading] = useState(true);
   const [registrationEnabled, setRegistrationEnabled] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { showToast, toastEl } = useToast();
@@ -82,11 +83,14 @@ export function AdminUsersPage() {
   const pkTimerRef = useRef<number | null>(null);
 
   const load = useCallback(async () => {
+    setUsersLoading(true);
     try {
       setUsers(await api<AdminUser[]>('/api/admin/users'));
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed');
+    } finally {
+      setUsersLoading(false);
     }
   }, []);
 
@@ -535,8 +539,8 @@ export function AdminUsersPage() {
           <p className="head-sub">管理开放注册与用户账号。</p>
         </div>
         <div className="page-header-actions">
-          <button type="button" className="btn" onClick={() => load()}>
-            重新加载
+          <button type="button" className="btn" disabled={usersLoading} onClick={() => load()}>
+            {usersLoading ? '加载中…' : '重新加载'}
           </button>
         </div>
       </div>
@@ -584,7 +588,13 @@ export function AdminUsersPage() {
                 </tr>
               </thead>
               <tbody>
-                {users.length === 0 ? (
+                {usersLoading ? (
+                  <tr>
+                    <td colSpan={5} className="table-empty">
+                      加载中…
+                    </td>
+                  </tr>
+                ) : users.length === 0 ? (
                   <tr>
                     <td colSpan={5} className="table-empty">
                       暂无用户

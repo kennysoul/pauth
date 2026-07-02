@@ -39,11 +39,16 @@ export function normalizeMicrosoftTenantId(value: string | null | undefined): st
 }
 
 export async function getGoogleOAuthConfig(env: Env): Promise<GoogleOAuthConfig> {
-  let clientId = (await getSetting(env, GOOGLE_KEYS.clientId)).trim();
-  let clientSecret = (await getSetting(env, GOOGLE_KEYS.clientSecret)).trim();
-  let redirectUri = (await getSetting(env, GOOGLE_KEYS.redirectUri)).trim();
-  let scopes =
-    (await getSetting(env, GOOGLE_KEYS.scopes)).trim() || GOOGLE_DEFAULT_SCOPES;
+  const [clientIdSetting, clientSecretSetting, redirectUriSetting, scopesSetting] = await Promise.all([
+    getSetting(env, GOOGLE_KEYS.clientId),
+    getSetting(env, GOOGLE_KEYS.clientSecret),
+    getSetting(env, GOOGLE_KEYS.redirectUri),
+    getSetting(env, GOOGLE_KEYS.scopes),
+  ]);
+  let clientId = clientIdSetting.trim();
+  let clientSecret = clientSecretSetting.trim();
+  let redirectUri = redirectUriSetting.trim();
+  let scopes = scopesSetting.trim() || GOOGLE_DEFAULT_SCOPES;
 
   if (!clientId) clientId = String((env as Record<string, string>).GOOGLE_OAUTH_CLIENT_ID || '').trim();
   if (!clientSecret) {
@@ -63,12 +68,19 @@ export async function getGoogleOAuthConfig(env: Env): Promise<GoogleOAuthConfig>
 }
 
 export async function getMicrosoftOAuthConfig(env: Env): Promise<MicrosoftOAuthConfig> {
-  const tenantId = normalizeMicrosoftTenantId(await getSetting(env, MICROSOFT_KEYS.tenantId));
-  const clientId = (await getSetting(env, MICROSOFT_KEYS.clientId)).trim();
-  const clientSecret = (await getSetting(env, MICROSOFT_KEYS.clientSecret)).trim();
-  const redirectUri = (await getSetting(env, MICROSOFT_KEYS.redirectUri)).trim();
-  const scopes =
-    (await getSetting(env, MICROSOFT_KEYS.scopes)).trim() || MICROSOFT_DEFAULT_SCOPES;
+  const [tenantSetting, clientIdSetting, clientSecretSetting, redirectUriSetting, scopesSetting] =
+    await Promise.all([
+      getSetting(env, MICROSOFT_KEYS.tenantId),
+      getSetting(env, MICROSOFT_KEYS.clientId),
+      getSetting(env, MICROSOFT_KEYS.clientSecret),
+      getSetting(env, MICROSOFT_KEYS.redirectUri),
+      getSetting(env, MICROSOFT_KEYS.scopes),
+    ]);
+  const tenantId = normalizeMicrosoftTenantId(tenantSetting);
+  const clientId = clientIdSetting.trim();
+  const clientSecret = clientSecretSetting.trim();
+  const redirectUri = redirectUriSetting.trim();
+  const scopes = scopesSetting.trim() || MICROSOFT_DEFAULT_SCOPES;
 
   return {
     tenantId,

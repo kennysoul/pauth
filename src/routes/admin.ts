@@ -15,7 +15,7 @@ import {
 import { newClientSecret, sha256Hex } from '../lib/crypto';
 import { registerAdminOAuthRoutes } from './admin-oauth';
 import { registerAdminBackupRoutes } from './admin-backup';
-import { buildOAuthUserFields } from './oauth';
+import { buildOAuthUserFieldsSync } from './oauth';
 import { getGoogleOAuthConfig, getMicrosoftOAuthConfig } from '../lib/oauth-config';
 import { getRootUserId, isRootUserId, ROOT_USER_NAME } from '../lib/root-user';
 
@@ -56,44 +56,65 @@ adminRoutes.get('/users', async (c) => {
   const status = c.req.query('status');
   const db = getDb(c.env);
 
-  const userRows =
+  const userQuery =
     status && status !== 'all'
-      ? await db.select().from(users).where(eq(users.status, status)).all()
-      : await db.select().from(users).all();
+      ? db.select().from(users).where(eq(users.status, status)).all()
+      : db.select().from(users).all();
 
-  const pkCounts = await db
-    .select({
-      userId: passkeys.userId,
-      count: sql<number>`count(*)`.as('count'),
-    })
-    .from(passkeys)
-    .groupBy(passkeys.userId)
-    .all();
+  const [
+    userRows,
+    pkCounts,
+    openInvites,
+    googleConfig,
+    microsoftConfig,
+    rootUserId,
+    l1Rows,
+    oauthRows,
+  ] = await Promise.all([
+    userQuery,
+    db
+      .select({
+        userId: passkeys.userId,
+        count: sql<number>`count(*)`.as('count'),
+      })
+      .from(passkeys)
+      .groupBy(passkeys.userId)
+      .all(),
+    db.select({ userId: invites.userId }).from(invites).where(isNull(invites.usedAt)).all(),
+    getGoogleOAuthConfig(c.env),
+    getMicrosoftOAuthConfig(c.env),
+    getRootUserId(c.env),
+    db.select().from(userL1Access).all(),
+    db.select().from(oauthIdentities).all(),
+  ]);
 
   const countMap = new Map(pkCounts.map((r) => [r.userId, r.count]));
-
-  const openInvites = await db
-    .select({ userId: invites.userId })
-    .from(invites)
-    .where(isNull(invites.usedAt))
-    .all();
   const inviteMap = new Set(openInvites.map((i) => i.userId));
+  const l1Map = new Map(l1Rows.map((r) => [r.userId, Boolean(r.enabled)]));
+  const oauthMap = new Map<string, Map<string, (typeof oauthRows)[number]>>();
+  for (const row of oauthRows) {
+    let byProvider = oauthMap.get(row.userId);
+    if (!byProvider) {
+      byProvider = new Map();
+      oauthMap.set(row.userId, byProvider);
+    }
+    byProvider.set(row.provider, row);
+  }
 
-  const googleEnabled = (await getGoogleOAuthConfig(c.env)).enabled;
-  const microsoftEnabled = (await getMicrosoftOAuthConfig(c.env)).enabled;
-  const rootUserId = await getRootUserId(c.env);
+  const googleEnabled = googleConfig.enabled;
+  const microsoftEnabled = microsoftConfig.enabled;
 
-  const result = [];
-  for (const u of userRows) {
-    const permissions = await getUserPermissions(c.env, u.id);
-    const oauthFields = await buildOAuthUserFields(
-      c.env,
+  const result = userRows.map((u) => {
+    const byProvider = oauthMap.get(u.id);
+    const oauthFields = buildOAuthUserFieldsSync(
       u,
       countMap.get(u.id) ?? 0,
       googleEnabled,
       microsoftEnabled,
+      byProvider?.get('google') ?? null,
+      byProvider?.get('microsoft') ?? null,
     );
-    result.push({
+    return {
       id: u.id,
       email: u.email,
       name: u.name,
@@ -102,11 +123,11 @@ adminRoutes.get('/users', async (c) => {
       createdAt: u.createdAt,
       passkeyCount: countMap.get(u.id) ?? 0,
       hasPendingInvite: inviteMap.has(u.id) && u.status === 'pending',
-      l1Enabled: permissions.l1Enabled,
+      l1Enabled: l1Map.get(u.id) ?? false,
       isRoot: isRootUserId(u.id, rootUserId),
       ...oauthFields,
-    });
-  }
+    };
+  });
 
   return c.json(result);
 });
