@@ -228,6 +228,36 @@ Each push to `main` triggers a new deployment.
 npm run deploy
 ```
 
+### One-shot bootstrap script (new machine / fresh VPS)
+
+From any directory, run the interactive installer — it will create D1 + KV, clone or update the GitHub repo, write `wrangler.local.jsonc`, migrate, and deploy:
+
+```bash
+# Interactive
+curl -fsSL https://raw.githubusercontent.com/kennysoul/pauth/main/scripts/deploy-cloudflare.sh -o deploy-cloudflare.sh
+chmod +x deploy-cloudflare.sh
+./deploy-cloudflare.sh
+
+# Or from a cloned repo
+npm run deploy:bootstrap
+
+# Non-interactive example
+./scripts/deploy-cloudflare.sh \
+  --zone kass.cc \
+  --auth-host auth.kass.cc \
+  --repo https://github.com/kennysoul/pauth.git \
+  --dir ~/pauth \
+  --yes
+```
+
+**Before running:**
+
+1. `npx wrangler login` (or export `CLOUDFLARE_API_TOKEN` with Workers + D1 + KV permissions)
+2. Apex domain must be on your Cloudflare account
+3. Private repo: use `git@github.com:you/pauth.git` or HTTPS with a Personal Access Token
+
+The script is idempotent for D1/KV (reuses existing resources with the same names). Re-runs `git pull`, `npm run build`, migrations, and deploy.
+
 ## Production vars example
 
 ```jsonc

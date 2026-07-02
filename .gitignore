@@ -3,4 +3,5 @@ dist/
 .wrangler/
 .dev.vars
 wrangler.local.jsonc
+.deploy-cloudflare.env
 *.local
