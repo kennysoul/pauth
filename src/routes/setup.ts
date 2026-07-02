@@ -5,6 +5,7 @@ import type { Env } from '../types';
 import { writeAuditLog } from '../lib/audit';
 import { getDb, newId, nowIso } from '../lib/db';
 import { passkeys, systemConfig, users } from '../lib/schema';
+import { setUserL1Access } from '../lib/permissions';
 import {
   appendCookies,
   clearCookie,
@@ -146,6 +147,8 @@ setupRoutes.post('/passkey/verify', async (c) => {
       .update(systemConfig)
       .set({ state: 'ACTIVE', updatedAt: ts })
       .where(eq(systemConfig.id, 1));
+
+    await setUserL1Access(c.env, resolved.user.id, true);
 
     await deleteSession(c.env, resolved.session.id);
 

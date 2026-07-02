@@ -15,7 +15,7 @@ const COOKIE_NAMES: Record<SessionRow['kind'], CookieKind> = {
 const COOKIE_PATHS: Record<SessionRow['kind'], string> = {
   normal: '/',
   setup: '/api/setup',
-  register: '/api/register',
+  register: '/api',
 };
 
 async function hmacSign(secret: string, data: string): Promise<string> {

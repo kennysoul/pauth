@@ -1,6 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Link, Navigate, Outlet } from 'react-router-dom';
+import { NavLink, Navigate, Outlet } from 'react-router-dom';
 import { api, type Me } from '../../api';
+
+function navClass({ isActive }: { isActive: boolean }) {
+  return isActive ? 'active' : undefined;
+}
 
 export function AdminLayout() {
   const [me, setMe] = useState<Me | null>(null);
@@ -33,7 +37,7 @@ export function AdminLayout() {
     return (
       <div className="container">
         <p className="error">需要管理员权限</p>
-        <Link to="/login">返回登录</Link>
+        <NavLink to="/login">返回登录</NavLink>
       </div>
     );
   }
@@ -41,19 +45,33 @@ export function AdminLayout() {
   return (
     <div className="admin-layout">
       <aside className="admin-nav">
-        <p>
-          <strong>{me.name}</strong>
-        </p>
-        <nav>
-          <Link to="/admin">概览</Link>
-          <Link to="/admin/users">用户管理</Link>
-          <Link to="/admin/pending">待审批</Link>
-          <Link to="/admin/config">系统设置</Link>
-          <Link to="/admin/logs">审计日志</Link>
+        <div className="admin-nav-user">
+          <div className="admin-nav-kicker">Kass Auth</div>
+          <div className="admin-nav-title">{me.name}</div>
+        </div>
+        <nav className="admin-nav-group">
+          <div className="admin-nav-group-title">管理</div>
+          <NavLink to="/admin/users" className={navClass}>
+            用户管理
+          </NavLink>
+          <NavLink to="/admin/clients" className={navClass}>
+            应用管理
+          </NavLink>
+          <NavLink to="/admin/integration" className={navClass}>
+            集成与安全
+          </NavLink>
+          <NavLink to="/admin/config" className={navClass}>
+            系统设置
+          </NavLink>
+          <NavLink to="/admin/logs" className={navClass}>
+            审计日志
+          </NavLink>
         </nav>
-        <button className="secondary" style={{ marginTop: '1rem' }} onClick={logout}>
-          登出
-        </button>
+        <div className="admin-nav-foot">
+          <button type="button" className="secondary nav-item" onClick={logout}>
+            登出
+          </button>
+        </div>
       </aside>
       <main className="admin-main">
         <Outlet />

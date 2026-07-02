@@ -41,13 +41,12 @@ export function AdminConfigPage() {
       <div className="card" style={{ maxWidth: 480 }}>
         <div className="toggle-row">
           <span>允许用户注册</span>
-          <button
-            onClick={() => toggleRegistration(!registrationEnabled)}
-          >
+          <button onClick={() => toggleRegistration(!registrationEnabled)}>
             {registrationEnabled ? '关闭' : '开启'}
           </button>
         </div>
         <p className="sub">新用户注册后必须经管理员审批才能登录（不可关闭）。</p>
+        <p className="sub">Google / Microsoft / Passkey 运行参数请在「集成与安全」中查看或配置。</p>
       </div>
 
       <div className="danger-zone card" style={{ maxWidth: 480 }}>

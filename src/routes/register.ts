@@ -111,7 +111,7 @@ registerRoutes.post('/passkey/verify', async (c) => {
     });
 
     await deleteSession(c.env, resolved.session.id);
-    appendCookies(c, clearCookie(c.env, 'reg_sid', '/api/register'));
+    appendCookies(c, clearCookie(c.env, 'reg_sid', '/api'));
 
     await writeAuditLog(c.env, resolved.user.id, 'PASSKEY_REGISTER', resolved.user.id, {
       passkeyId,

@@ -1,235 +1,199 @@
-# pauth L1/L2 Upgrade Plan and Specification (Draft v1)
+# pauth L1/L2 Specification and Implementation Status
 
-This document defines the upgrade plan and baseline specifications for supporting:
-
-- L1-only usage (gateway/browser pass-through)
-- L2-only usage (application identity only)
-- L1+L2 combined usage
-- Independent L1 and L2 grants per user
+This document describes the authentication model and the current implementation in pauth.
 
 ---
 
-## 1) Target Architecture
+## 1) Architecture
 
 ### 1.1 Layer definitions
 
-- L1: gateway access gate for browser traffic
-- L2: application-level identity and authorization for registered clients
+- **L1**: gateway access gate for browser traffic (`GET /api/verify`, Caddy `forward_auth`)
+- **App OAuth** (`/api/l2/*`): application-level identity via OAuth-style authorization code flow
 
-### 1.2 Independence model
+pauth acts as a **self-hosted IdP** (similar to Google OAuth): apps register a Client ID; **all active pauth users** may sign in via OAuth. Per-app authorization (roles, feature access) is managed by each application, not by pauth.
 
-- L1 and L2 are independent grants
-- A user may have:
-  - L2 grant for SuMusic but no L1 grant
-  - L1 grant only
-  - both grants
-  - neither grant
+### 1.2 User admission
 
-### 1.3 Effective decision rule
+| Path | Approval |
+|------|----------|
+| Self-registration | Admin approves once (`pending` → `active`) |
+| Admin invite link | No second approval; Passkey registration sets `active` |
 
-For a request to client `C`:
+After admission, the only pauth-managed permission toggle is **L1 gateway access**.
+
+### 1.3 Effective decision rule (app OAuth)
+
+For client `C` and user `U`:
 
 ```text
 ALLOW =
-  authenticated
-  AND client_enabled
-  AND l2_granted(user, C)
+  U.status == active
+  AND client.enabled
   AND (
     C.access_mode != L1_AND_L2
-    OR l1_granted(user)
+    OR l1_granted(U)
   )
 ```
 
----
-
-## 2) Data Model Specification
-
-## 2.1 New tables
-
-1) `clients`
-
-- `client_id` (PK)
-- `name`
-- `access_mode` (`L2_ONLY` | `L1_AND_L2`)
-- `enabled` (boolean)
-- `created_at`, `updated_at`
-
-2) `client_redirect_uris`
-
-- `id` (PK)
-- `client_id` (FK -> clients.client_id)
-- `redirect_uri`
-- unique (`client_id`, `redirect_uri`)
-
-3) `user_l1_access`
-
-- `user_id` (PK/FK -> users.id)
-- `enabled` (boolean)
-- `updated_at`
-
-4) `user_client_access`
-
-- `user_id` (FK -> users.id)
-- `client_id` (FK -> clients.client_id)
-- `enabled` (boolean)
-- `app_role` (nullable text)
-- `updated_at`
-- unique (`user_id`, `client_id`)
-
-5) `auth_codes`
-
-- `code` (PK)
-- `user_id`
-- `client_id`
-- `redirect_uri`
-- `scope`
-- `nonce`
-- `expires_at`
-- `used_at` (nullable)
-- `created_at`
-
-6) `access_tokens` (if opaque token mode)
-
-- `token_hash` (PK)
-- `user_id`
-- `client_id`
-- `scope`
-- `expires_at`
-- `revoked_at` (nullable)
-- `created_at`
-
-### 2.2 Existing table reuse
-
-- Keep current `users`, `passkeys`, `sessions`, `audit_logs`.
-- Do not overload `users.status` to represent L1/L2 grants.
+There is **no per-app user grant** in pauth. Registering a new OAuth client makes it available to all active users immediately (subject to L1 requirement if configured).
 
 ---
 
-## 3) API Specification Scope
+## 2) Data Model (implemented)
 
-### 3.1 L1 APIs
+Migrations: `0001_init.sql`, `0002_l1_l2_clients.sql`, `0003_l2_oauth.sql`, `0004_client_secret_plain.sql`
 
-- `GET /api/verify` (gateway use)
+### 2.1 `clients`
 
-### 3.2 L2 APIs
+| Column | Notes |
+|--------|--------|
+| `client_id` | Unique string, chosen by admin (e.g. `sumusic`) |
+| `name` | Display name |
+| `access_mode` | `L2_ONLY` (default) or `L1_AND_L2` (requires L1 grant) |
+| `client_secret_hash` | SHA-256 of secret (token exchange) |
+| `client_secret` | Plaintext secret (admin retrieval only) |
+| `redirect_uris` | Legacy column, unused (always `[]`) |
+| `enabled` | Boolean |
 
-- `GET /api/l2/authorize`
-- `POST /api/l2/token`
-- `GET /api/l2/userinfo` (optional but recommended)
+Admin UI shows `access_mode` as **「需 L1 网关」** checkbox (`L1_AND_L2` = checked).
 
-### 3.3 Admin APIs
+### 2.2 `user_l1_access`
 
-- Client management
-- User L1 grant management
-- User L2 client grant management
-- Audit query filters by layer/client/user/decision
+- `user_id`, `enabled`, `updated_at`
+- Only user-level permission managed by pauth after admission
 
----
+### 2.3 `user_client_access` (legacy)
 
-## 4) Security Requirements
+- Retained in schema for backward compatibility; **not used** for access decisions in the simplified model
 
-1. Exact redirect URI matching
-2. Mandatory `state` in authorize flow
-3. Recommended `nonce` support
-4. Authorization code TTL <= 60s
-5. Single-use code enforcement
-6. Client secret required for token exchange (for confidential clients)
-7. Opaque token storage as hash (not plain token)
-8. Structured audit logging for all grant/deny/security events
+### 2.4 `auth_codes`
 
-Cookie requirements:
+- One-time authorization codes (TTL 600s, single-use)
 
-- `HttpOnly`
-- `Secure` (production)
-- `SameSite=Lax`
-- `Domain=.example.com` (or equivalent parent domain)
+### 2.5 `access_tokens`
 
----
+- Opaque bearer tokens stored as SHA-256 hash (TTL 600s)
 
-## 5) Audit and Observability Spec
+### 2.6 `invites`
 
-Each critical event should include:
-
-- `event_type`
-- `layer` (`L1` or `L2`)
-- `user_id`
-- `client_id` (for L2)
-- `decision` (`allow` or `deny`)
-- `reason_code`
-- `request_id`
-- `created_at`
-
-Recommended event types:
-
-- `L1_VERIFY_ALLOW`
-- `L1_VERIFY_DENY`
-- `L2_AUTHORIZE_ALLOW`
-- `L2_AUTHORIZE_DENY`
-- `L2_TOKEN_ISSUED`
-- `L2_TOKEN_DENY`
-- `ADMIN_CLIENT_CREATE`
-- `ADMIN_GRANT_UPDATE`
+- Admin-created invite tokens for Passkey registration with optional pre-set L1 (7-day TTL, single-use)
 
 ---
 
-## 6) Rollout Plan
+## 3) API Overview (implemented)
 
-### Phase 1: Schema and internal model
+### 3.1 Public / system
 
-- Add new tables and indexes
-- Add migration scripts and rollback notes
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/system/state` | `{ state, registrationEnabled, origin }` |
+| GET | `/api/verify` | L1 forward-auth (requires L1 grant + active session) |
+| GET | `/api/l2/authorize` | Start OAuth flow |
+| POST | `/api/l2/token` | Exchange code for token |
+| GET | `/api/l2/userinfo` | User profile from Bearer token |
+| GET | `/api/invite/:token` | Invite metadata |
+| POST | `/api/invite/:token/begin` | Start invite registration session |
+| POST | `/api/invite/:token/passkey/*` | Passkey registration for invite |
 
-### Phase 2: L1 compatibility-preserving upgrade
+### 3.2 Admin (`/api/admin/*`, admin session required)
 
-- Keep `/api/verify` behavior
-- Switch L1 decision to `user_l1_access.enabled`
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET/PATCH | `/config` | Registration toggle |
+| GET | `/users` | List users with L1 flag |
+| PATCH | `/users/:id` | Update `name` and/or `status` |
+| DELETE | `/users/:id` | Delete user (not self, not last admin) |
+| PUT | `/users/:id/permissions` | Set `{ l1Enabled }` |
+| POST | `/invites` | Create user + invite URL `{ name, role, l1Enabled? }` |
+| GET/POST | `/clients` | List / create OAuth clients |
+| PATCH/DELETE | `/clients/:clientId` | Update / delete client |
+| POST | `/clients/:clientId/regenerate-secret` | Rotate client secret |
+| GET | `/audit-logs` | Audit log query |
+| POST | `/system/reset` | Factory reset |
 
-### Phase 3: L2 protocol implementation
-
-- Implement `/api/l2/authorize`, `/api/l2/token`
-- Add optional `/api/l2/userinfo`
-
-### Phase 4: Admin management
-
-- Add client CRUD
-- Add L1 and L2 grant APIs
-- Add audit filters
-
-### Phase 5: SuMusic integration
-
-- SuMusic login redirects to `/api/l2/authorize`
-- SuMusic backend exchanges `code` at `/api/l2/token`
-- SuMusic creates local app session after token success
-
-### Phase 6: Generalized client onboarding
-
-- Add S2/S3 client registrations
-- Reuse same L2 flow with client-specific grants
-
----
-
-## 7) Backward Compatibility
-
-- L1 gateways continue using `/api/verify`.
-- Existing passkey login/session behavior remains valid.
-- L2 is additive and does not break L1-only deployments.
+Admin UI: user management (L1 only), application management, invite flow.
 
 ---
 
-## 8) Acceptance Checklist
+## 4) OAuth redirect URI policy
 
-- [ ] L1-only client works without L2 flows
-- [ ] L2-only client works with no L1 grant
-- [ ] L1+L2 client blocks users lacking L1 grant
-- [ ] User with only SuMusic L2 grant can log in to SuMusic but not S2/S3
-- [ ] Revoking grant immediately blocks next authorize/token exchange
-- [ ] All deny decisions are visible in audit logs
+**No per-client redirect URI registration.** At authorize time, `redirect_uri` must be:
+
+- A valid absolute **HTTPS** URL, or
+- `http://localhost` / `http://127.0.0.1` (local development)
+
+Access control is enforced by **Client ID + client secret + active user (+ L1 if required)**, not by a redirect URI allowlist.
+
+Login `return_to` on auth host remains restricted to `RP_ID` and subdomains (open-redirect protection).
 
 ---
 
-## 9) Out of Scope (v1)
+## 5) Security (current behavior)
 
-- Full OIDC discovery/JWKS metadata
+1. Mandatory `state` in OAuth authorize flow
+2. Optional `nonce` (stored on auth code, not validated further in v1)
+3. Authorization code TTL: **600 seconds**, single-use
+4. Access token TTL: **600 seconds**, stored as hash
+5. Client secret required for token exchange; stored hashed for verification, plaintext for admin display
+6. CSRF origin check on mutating `/api/*` (server-to-server token calls pass without Origin)
+7. Structured audit logs for OAuth authorize/token and admin actions
+
+Cookie requirements: `HttpOnly`, `Secure` (HTTPS), `SameSite=Lax`, `Domain` from `COOKIE_DOMAIN`.
+
+---
+
+## 6) App integration
+
+1. Admin creates client in **应用管理**, copies config:
+
+```text
+PAUTH_CLIENT_ID=<clientId>
+PAUTH_CLIENT_SECRET=<secret>
+PAUTH_AUTHORIZE_URL=<ORIGIN>/api/l2/authorize
+PAUTH_TOKEN_URL=<ORIGIN>/api/l2/token
+```
+
+2. App redirects browser to `/api/l2/authorize?client_id=...&redirect_uri=...&response_type=code&state=...`
+
+3. App backend `POST /api/l2/token` with `grant_type=authorization_code`, code, client credentials, matching `redirect_uri`.
+
+4. App creates **local session** from `user.sub` / `user.name` and manages app-specific roles internally.
+
+Passkey authentication happens on the auth host during the authorize flow; the app never handles pauth passkeys directly.
+
+---
+
+## 7) Implementation status
+
+| Phase | Status |
+|-------|--------|
+| Schema (clients, grants, codes, tokens, invites) | Done |
+| L1 `/api/verify` with `user_l1_access` | Done |
+| OAuth authorize / token / userinfo | Done |
+| Admin client CRUD + secret management | Done |
+| Admin user L1 + invites | Done |
+| Admin UI | Done |
+| SuMusic / external app OAuth adapter | App-side (not in pauth repo) |
+
+---
+
+## 8) Acceptance checklist
+
+- [x] L1 `/api/verify` checks `user_l1_access`
+- [x] OAuth authorize issues code for any active user on enabled client
+- [x] OAuth token exchange validates client secret and redirect_uri match
+- [x] `L1_AND_L2` client blocks users without L1
+- [x] Disabling user blocks next authorize/token
+- [ ] Audit log filters by layer/client (basic logging exists; filtered UI TBD)
+
+---
+
+## 9) Out of scope (v1)
+
+- OIDC discovery / JWKS
+- JWT id_tokens (opaque `id_token` placeholder only)
 - Social login providers
-- Fine-grained consent UI and scopes beyond `openid profile`
-
+- Per-client redirect URI allowlists
+- Per-app user grants in pauth (apps manage their own authorization)
+- Fine-grained consent UI beyond `openid profile`

@@ -1,31 +1,48 @@
 openapi: 3.1.0
 info:
-  title: pauth L1/L2 API
-  version: 1.0.0-draft
+  title: pauth API
+  version: 1.0.0
   description: |
-    Draft OpenAPI specification for pauth L1/L2 model.
+    OpenAPI specification for the implemented pauth authentication model.
 
-    - L1: gateway/browser pass-through check (`/api/verify`)
-    - L2: app login and identity (`/api/l2/authorize`, `/api/l2/token`, `/api/l2/userinfo`)
-    - Admin: client and grant management (`/api/admin/*`)
+    - L1: gateway forward-auth (`GET /api/verify`)
+    - OAuth: app login (`/api/l2/authorize`, `/api/l2/token`, `/api/l2/userinfo`)
+    - Admin: clients, users, L1 permissions, invites (`/api/admin/*`)
+
+    All active pauth users may OAuth into registered clients. Per-app authorization is managed by each application.
+
+    OAuth `redirect_uri`: any valid HTTPS URL (localhost HTTP for dev). No per-client URI registration.
 
 servers:
   - url: https://auth.example.com
     description: Production
 
 tags:
+  - name: System
   - name: L1
-  - name: L2
+  - name: OAuth
   - name: Admin
 
 paths:
+  /api/system/state:
+    get:
+      tags: [System]
+      summary: System state and canonical origin
+      responses:
+        "200":
+          description: State
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemState"
+
   /api/verify:
     get:
       tags: [L1]
       summary: L1 gateway verification
       description: |
-        Forward-auth endpoint for Caddy/Nginx.
-        Returns `200` with identity headers when L1 passes, or `302` redirect to login otherwise.
+        Requires active session and L1 grant (`user_l1_access.enabled`).
+        Returns 200 with identity headers, or 302 to login.
       parameters:
         - in: header
           name: X-Forwarded-Proto
@@ -40,34 +57,26 @@ paths:
         - cookieSid: []
       responses:
         "200":
-          description: L1 verification success
+          description: L1 success
           headers:
             X-Auth-User-Id:
               schema: { type: string }
             X-Auth-User-Email:
-              schema: { type: string, format: email }
+              schema: { type: string }
             X-Auth-User-Name:
               schema: { type: string }
-            Cache-Control:
+            X-Auth-User-Role:
               schema: { type: string }
-          content:
-            application/json:
-              schema:
-                type: "null"
-              example: null
         "302":
           description: Redirect to login
-          headers:
-            Location:
-              schema: { type: string, format: uri }
 
   /api/l2/authorize:
     get:
-      tags: [L2]
-      summary: Authorize user for L2 client
+      tags: [OAuth]
+      summary: OAuth authorization (browser redirect)
       description: |
-        Browser redirect endpoint for L2 authorization code flow.
-        On success, redirects to `redirect_uri` with `code` and `state`.
+        On success, redirects to `redirect_uri?code=...&state=...`.
+        `redirect_uri` must be HTTPS (or localhost HTTP for dev).
       parameters:
         - in: query
           name: client_id
@@ -80,57 +89,35 @@ paths:
         - in: query
           name: response_type
           required: true
-          schema:
-            type: string
-            enum: [code]
+          schema: { type: string, enum: [code] }
         - in: query
           name: scope
-          required: false
-          schema:
-            type: string
-            default: openid profile
+          schema: { type: string, default: "openid profile" }
         - in: query
           name: state
           required: true
           schema: { type: string }
         - in: query
           name: nonce
-          required: false
           schema: { type: string }
-      security:
-        - cookieSid: []
       responses:
         "302":
-          description: Redirect back to app callback (success or access_denied)
-          headers:
-            Location:
-              schema: { type: string, format: uri }
+          description: Callback redirect (success or access_denied)
         "400":
-          description: Invalid request/client/redirect URI
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
               examples:
-                invalid_client:
-                  value:
-                    error: invalid_client
-                    message: Unknown or disabled client_id
                 invalid_redirect_uri:
                   value:
                     error: invalid_redirect_uri
-                    message: redirect_uri is not allowed for this client
-                invalid_request:
-                  value:
-                    error: invalid_request
-                    message: state is required
+                    message: redirect_uri must be a valid HTTPS URL
 
   /api/l2/token:
     post:
-      tags: [L2]
-      summary: Exchange code for L2 token
-      description: |
-        Backend endpoint for authorization code exchange.
+      tags: [OAuth]
+      summary: Exchange authorization code for token
       requestBody:
         required: true
         content:
@@ -139,101 +126,52 @@ paths:
               $ref: "#/components/schemas/TokenRequest"
       responses:
         "200":
-          description: Token exchange success
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/TokenResponse"
-              example:
-                access_token: at_01JATOKEN
-                token_type: Bearer
-                expires_in: 600
-                scope: openid profile
-                id_token: id_opaque_or_jwt
-                user:
-                  sub: usr_01JABCDEF
-                  email: user@example.com
-                  name: Kenny
         "400":
-          description: Invalid token request or grant
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                unsupported_grant_type:
-                  value:
-                    error: unsupported_grant_type
-                    message: Only authorization_code is supported
-                invalid_grant:
-                  value:
-                    error: invalid_grant
-                    message: Authorization code is invalid
-                redirect_uri_mismatch:
-                  value:
-                    error: invalid_grant
-                    message: redirect_uri mismatch
         "401":
-          description: Client authentication failed
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: invalid_client
-                message: Client authentication failed
         "403":
-          description: User no longer authorized
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: access_denied
-                message: User no longer has required client or L1 access
 
   /api/l2/userinfo:
     get:
-      tags: [L2]
-      summary: Get user profile from access token
+      tags: [OAuth]
+      summary: User profile from Bearer token
       security:
         - bearerAuth: []
       responses:
         "200":
-          description: User info
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/UserInfo"
-              example:
-                sub: usr_01JABCDEF
-                email: user@example.com
-                name: Kenny
         "401":
-          description: Invalid or missing token
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                missing:
-                  value:
-                    error: invalid_token
-                    message: Bearer token is required
-                expired_or_revoked:
-                  value:
-                    error: invalid_token
-                    message: Token is expired or revoked
 
   /api/admin/clients:
     get:
       tags: [Admin]
-      summary: List clients
+      summary: List OAuth clients
       security:
         - cookieSid: []
       responses:
         "200":
-          description: Client list
           content:
             application/json:
               schema:
@@ -242,7 +180,7 @@ paths:
                   $ref: "#/components/schemas/Client"
     post:
       tags: [Admin]
-      summary: Create client
+      summary: Create OAuth client (auto-generates clientSecret)
       security:
         - cookieSid: []
       requestBody:
@@ -253,23 +191,10 @@ paths:
               $ref: "#/components/schemas/CreateClientRequest"
       responses:
         "201":
-          description: Created
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/CreateClientResponse"
-        "400":
-          description: Invalid request payload
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "409":
-          description: client_id conflict
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
 
   /api/admin/clients/{clientId}:
     patch:
@@ -283,112 +208,74 @@ paths:
           required: true
           schema: { type: string }
       requestBody:
-        required: true
         content:
           application/json:
             schema:
               $ref: "#/components/schemas/UpdateClientRequest"
       responses:
         "200":
-          description: Updated
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/OkResponse"
-        "404":
-          description: Client not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-
-  /api/admin/users/{userId}/l1-access:
-    put:
-      tags: [Admin]
-      summary: Set user L1 access
-      security:
-        - cookieSid: []
-      parameters:
-        - in: path
-          name: userId
-          required: true
-          schema: { type: string }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/SetL1AccessRequest"
-      responses:
-        "200":
-          description: Updated L1 grant
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SetL1AccessResponse"
-        "404":
-          description: User not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-
-  /api/admin/users/{userId}/client-access:
-    get:
-      tags: [Admin]
-      summary: List user client grants
-      security:
-        - cookieSid: []
-      parameters:
-        - in: path
-          name: userId
-          required: true
-          schema: { type: string }
-      responses:
-        "200":
-          description: User client grant list
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/UserClientGrantListResponse"
-
-  /api/admin/users/{userId}/client-access/{clientId}:
-    put:
-      tags: [Admin]
-      summary: Upsert user grant for a client
-      security:
-        - cookieSid: []
-      parameters:
-        - in: path
-          name: userId
-          required: true
-          schema: { type: string }
-        - in: path
-          name: clientId
-          required: true
-          schema: { type: string }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/SetUserClientGrantRequest"
-      responses:
-        "200":
-          description: Updated grant
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SetUserClientGrantResponse"
-        "404":
-          description: User or client not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
     delete:
       tags: [Admin]
-      summary: Revoke user grant for a client
+      summary: Delete client
+      security:
+        - cookieSid: []
+      parameters:
+        - in: path
+          name: clientId
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+
+  /api/admin/clients/{clientId}/regenerate-secret:
+    post:
+      tags: [Admin]
+      summary: Regenerate client secret
+      security:
+        - cookieSid: []
+      parameters:
+        - in: path
+          name: clientId
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegenerateSecretResponse"
+
+  /api/admin/users:
+    get:
+      tags: [Admin]
+      summary: List users with L1 flag
+      security:
+        - cookieSid: []
+      parameters:
+        - in: query
+          name: status
+          schema: { type: string, enum: [pending, active, disabled, all] }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AdminUser"
+
+  /api/admin/users/{userId}:
+    patch:
+      tags: [Admin]
+      summary: Update user name or status
       security:
         - cookieSid: []
       parameters:
@@ -396,17 +283,74 @@ paths:
           name: userId
           required: true
           schema: { type: string }
-        - in: path
-          name: clientId
-          required: true
-          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUserRequest"
       responses:
         "200":
-          description: Revoked
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/OkResponse"
+    delete:
+      tags: [Admin]
+      summary: Delete user
+      security:
+        - cookieSid: []
+      parameters:
+        - in: path
+          name: userId
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+
+  /api/admin/users/{userId}/permissions:
+    put:
+      tags: [Admin]
+      summary: Set user L1 gateway access
+      security:
+        - cookieSid: []
+      parameters:
+        - in: path
+          name: userId
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetPermissionsRequest"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SetPermissionsResponse"
+
+  /api/admin/invites:
+    post:
+      tags: [Admin]
+      summary: Create pre-provisioned user and invite URL
+      security:
+        - cookieSid: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateInviteRequest"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateInviteResponse"
 
 components:
   securitySchemes:
@@ -422,30 +366,24 @@ components:
   schemas:
     ErrorResponse:
       type: object
-      additionalProperties: false
       required: [error, message]
       properties:
-        error:
-          type: string
-          examples:
-            - invalid_request
-            - invalid_client
-            - invalid_grant
-            - invalid_token
-            - access_denied
-            - not_found
-            - conflict
-        message:
-          type: string
+        error: { type: string }
+        message: { type: string }
 
     OkResponse:
       type: object
-      additionalProperties: false
       required: [ok]
       properties:
-        ok:
-          type: boolean
-          const: true
+        ok: { type: boolean, const: true }
+
+    SystemState:
+      type: object
+      required: [state, registrationEnabled, origin]
+      properties:
+        state: { type: string, enum: [NEEDS_SETUP, ACTIVE] }
+        registrationEnabled: { type: boolean }
+        origin: { type: string, format: uri }
 
     AccessMode:
       type: string
@@ -453,207 +391,138 @@ components:
 
     UserInfo:
       type: object
-      additionalProperties: false
       required: [sub, email, name]
       properties:
-        sub:
-          type: string
-          description: pauth stable user ID
-        email:
-          type: string
-          format: email
-        name:
-          type: string
+        sub: { type: string, description: Stable pauth user ID }
+        email: { type: string }
+        name: { type: string }
 
     TokenRequest:
       type: object
-      additionalProperties: false
       required: [grant_type, code, client_id, client_secret, redirect_uri]
       properties:
-        grant_type:
-          type: string
-          enum: [authorization_code]
-        code:
-          type: string
-        client_id:
-          type: string
-        client_secret:
-          type: string
-        redirect_uri:
-          type: string
-          format: uri
+        grant_type: { type: string, enum: [authorization_code] }
+        code: { type: string }
+        client_id: { type: string }
+        client_secret: { type: string }
+        redirect_uri: { type: string, format: uri }
 
     TokenResponse:
       type: object
-      additionalProperties: false
       required: [access_token, token_type, expires_in, scope, user]
       properties:
-        access_token:
-          type: string
-        token_type:
-          type: string
-          enum: [Bearer]
-        expires_in:
-          type: integer
-          minimum: 1
-        scope:
-          type: string
-        id_token:
-          type: string
-          nullable: true
+        access_token: { type: string }
+        token_type: { type: string, enum: [Bearer] }
+        expires_in: { type: integer, example: 600 }
+        scope: { type: string }
+        id_token: { type: string, nullable: true }
         user:
           $ref: "#/components/schemas/UserInfo"
 
     Client:
       type: object
-      additionalProperties: false
-      required: [clientId, name, accessMode, enabled, redirectUris]
+      required: [id, clientId, name, accessMode, enabled, redirectUris, clientSecret]
       properties:
-        clientId:
-          type: string
-        name:
-          type: string
+        id: { type: string }
+        clientId: { type: string }
+        name: { type: string }
         accessMode:
           $ref: "#/components/schemas/AccessMode"
-        enabled:
-          type: boolean
+        enabled: { type: boolean }
         redirectUris:
           type: array
-          minItems: 1
-          items:
-            type: string
-            format: uri
+          items: { type: string }
+          description: Legacy field, always empty array
+        clientSecret:
+          type: string
+          nullable: true
+          description: Plaintext secret for admin; null if not yet generated
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
 
     CreateClientRequest:
       type: object
-      additionalProperties: false
-      required: [clientId, name, accessMode, redirectUris, enabled]
+      required: [clientId, name, accessMode]
       properties:
-        clientId:
-          type: string
-        name:
-          type: string
+        clientId: { type: string }
+        name: { type: string }
         accessMode:
           $ref: "#/components/schemas/AccessMode"
-        redirectUris:
-          type: array
-          minItems: 1
-          items:
-            type: string
-            format: uri
-        enabled:
-          type: boolean
+        enabled: { type: boolean, default: true }
 
     CreateClientResponse:
       type: object
-      additionalProperties: false
-      required: [ok, client]
+      required: [ok, id, clientId, clientSecret]
       properties:
-        ok:
-          type: boolean
-          const: true
-        client:
-          $ref: "#/components/schemas/Client"
+        ok: { type: boolean, const: true }
+        id: { type: string }
+        clientId: { type: string }
+        clientSecret: { type: string }
 
     UpdateClientRequest:
       type: object
-      additionalProperties: false
       properties:
-        name:
-          type: string
+        name: { type: string }
         accessMode:
           $ref: "#/components/schemas/AccessMode"
-        redirectUris:
-          type: array
-          minItems: 1
-          items:
-            type: string
-            format: uri
-        enabled:
-          type: boolean
-      minProperties: 1
+        enabled: { type: boolean }
 
-    SetL1AccessRequest:
+    RegenerateSecretResponse:
       type: object
-      additionalProperties: false
-      required: [enabled]
+      required: [ok, clientId, clientSecret]
       properties:
-        enabled:
-          type: boolean
+        ok: { type: boolean, const: true }
+        clientId: { type: string }
+        clientSecret: { type: string }
 
-    SetL1AccessResponse:
+    AdminUser:
       type: object
-      additionalProperties: false
-      required: [ok, userId, l1Access]
       properties:
-        ok:
-          type: boolean
-          const: true
-        userId:
-          type: string
-        l1Access:
+        id: { type: string }
+        email: { type: string }
+        name: { type: string }
+        role: { type: string }
+        status: { type: string }
+        passkeyCount: { type: integer }
+        hasPendingInvite: { type: boolean }
+        l1Enabled: { type: boolean }
+
+    UpdateUserRequest:
+      type: object
+      properties:
+        name: { type: string }
+        status: { type: string, enum: [active, disabled] }
+
+    SetPermissionsRequest:
+      type: object
+      required: [l1Enabled]
+      properties:
+        l1Enabled: { type: boolean }
+
+    SetPermissionsResponse:
+      type: object
+      required: [ok, permissions]
+      properties:
+        ok: { type: boolean, const: true }
+        permissions:
           type: object
-          additionalProperties: false
-          required: [enabled]
           properties:
-            enabled:
-              type: boolean
+            l1Enabled: { type: boolean }
 
-    SetUserClientGrantRequest:
+    CreateInviteRequest:
       type: object
-      additionalProperties: false
-      required: [enabled]
+      required: [name]
       properties:
-        enabled:
-          type: boolean
-        appRole:
-          type: string
-          nullable: true
+        name: { type: string }
+        role: { type: string, enum: [admin, user], default: user }
+        l1Enabled: { type: boolean, default: false }
 
-    SetUserClientGrantResponse:
+    CreateInviteResponse:
       type: object
-      additionalProperties: false
-      required: [ok, userId, clientId, grant]
+      required: [ok, url, token, expiresAt, userId]
       properties:
-        ok:
-          type: boolean
-          const: true
-        userId:
-          type: string
-        clientId:
-          type: string
-        grant:
-          type: object
-          additionalProperties: false
-          required: [enabled]
-          properties:
-            enabled:
-              type: boolean
-            appRole:
-              type: string
-              nullable: true
-
-    UserClientGrant:
-      type: object
-      additionalProperties: false
-      required: [clientId, enabled]
-      properties:
-        clientId:
-          type: string
-        enabled:
-          type: boolean
-        appRole:
-          type: string
-          nullable: true
-
-    UserClientGrantListResponse:
-      type: object
-      additionalProperties: false
-      required: [userId, grants]
-      properties:
-        userId:
-          type: string
-        grants:
-          type: array
-          items:
-            $ref: "#/components/schemas/UserClientGrant"
+        ok: { type: boolean, const: true }
+        url: { type: string, format: uri }
+        token: { type: string }
+        expiresAt: { type: string, format: date-time }
+        userId: { type: string }

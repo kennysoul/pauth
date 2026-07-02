@@ -4,6 +4,7 @@ import type { Env } from '../types';
 import { getDb } from '../lib/db';
 import { systemConfig } from '../lib/schema';
 import { resolveAnySessionForVerify } from '../lib/session';
+import { userHasL1Access } from '../lib/permissions';
 
 export const systemRoutes = new Hono<{ Bindings: Env }>();
 
@@ -13,12 +14,14 @@ systemRoutes.get('/state', async (c) => {
   return c.json({
     state: config?.state ?? 'NEEDS_SETUP',
     registrationEnabled: Boolean(config?.registrationEnabled),
+    origin: c.env.ORIGIN,
   });
 });
 
 systemRoutes.get('/verify', async (c) => {
   const resolved = await resolveAnySessionForVerify(c);
-  if (!resolved || resolved.user.status !== 'active') {
+  const l1Ok = resolved ? await userHasL1Access(c.env, resolved.user.id) : false;
+  if (!resolved || resolved.user.status !== 'active' || !l1Ok) {
     // 从 Caddy forward_auth 传入的原始请求信息
     const proto    = c.req.header('X-Forwarded-Proto') ?? 'https';
     const host     = c.req.header('X-Forwarded-Host')  ?? c.req.header('Host') ?? '';

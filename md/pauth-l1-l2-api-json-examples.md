@@ -1,11 +1,8 @@
-# pauth L1/L2 API JSON Examples (Draft v1)
+# pauth L1/L2 API JSON Examples
 
-This document provides a complete request/response JSON example set for the L1 + L2 model:
+Request/response examples for the implemented pauth authentication model.
 
-- L1: gateway/browser access check
-- L2: application identity and authorization for clients (S1/S2/S3, e.g. SuMusic)
-
-Base URL:
+Base URL (replace with your deployment `ORIGIN`):
 
 ```text
 https://auth.example.com
@@ -13,96 +10,84 @@ https://auth.example.com
 
 ---
 
-## 1) L1 API: `GET /api/verify`
+## 1) System: `GET /api/system/state`
 
-Purpose:
+```json
+{
+  "state": "ACTIVE",
+  "registrationEnabled": false,
+  "origin": "https://auth.example.com"
+}
+```
 
-- For Caddy/Nginx forward auth
-- Checks whether user can pass L1 gate
+`origin` is the canonical auth server URL (from Worker `ORIGIN` var). Admin UI uses this for integration docs.
 
-### 1.1 Success (`200`)
+---
 
-Request (gateway subrequest):
+## 2) L1 API: `GET /api/verify`
+
+Gateway forward-auth. Requires valid session **and** L1 grant (`user_l1_access.enabled`).
+
+### 2.1 Success (`200`)
 
 ```http
 GET /api/verify HTTP/1.1
 Host: auth.example.com
-Cookie: sid=sid_abc.sig_xyz
+Cookie: sid=...
 X-Forwarded-Proto: https
 X-Forwarded-Host: app.example.com
-X-Forwarded-Uri: /app/home
+X-Forwarded-Uri: /home
 ```
 
-Response:
+Response headers:
 
 ```http
 HTTP/1.1 200 OK
-X-Auth-User-Id: usr_01JABCDEF
-X-Auth-User-Email: user@example.com
+X-Auth-User-Id: 4cf0ab13-c09b-44f8-aaa0-cb8a67c788be
+X-Auth-User-Email: admin@system.internal
 X-Auth-User-Name: Kenny
+X-Auth-User-Role: admin
 Cache-Control: private, no-store, must-revalidate
 ```
 
-Response body:
+Body: empty (`null`).
 
-```json
-null
-```
-
-### 1.2 Not logged in (`302`)
-
-Response:
+### 2.2 Not logged in or no L1 grant (`302`)
 
 ```http
 HTTP/1.1 302 Found
-Location: https://auth.example.com/login?return_to=https%3A%2F%2Fapp.example.com%2Fapp%2Fhome
+Location: https://auth.example.com/login?return_to=...
 ```
-
-### 1.3 Logged in but no L1 grant (`302`)
-
-Response:
-
-```http
-HTTP/1.1 302 Found
-Location: https://auth.example.com/login?return_to=https%3A%2F%2Fapp.example.com%2Fapp%2Fhome
-```
-
-Notes:
-
-- For L1 gateway compatibility, failed checks use redirect instead of JSON errors.
 
 ---
 
-## 2) L2 Authorization API: `GET /api/l2/authorize`
+## 3) OAuth Authorization: `GET /api/l2/authorize`
 
-Purpose:
+Any **active** pauth user may authorize. No per-app user grant is required.
 
-- App redirects user here to start/complete L2 login
-- On success, returns one-time code to app callback
-
-### 2.1 Request example
+### 3.1 Request
 
 ```http
-GET /api/l2/authorize?client_id=sumusic&redirect_uri=https%3A%2F%2Fapp.example.com%2Fauth%2Fcallback&response_type=code&scope=openid%20profile&state=st_8d2f4b&nonce=n_01xy HTTP/1.1
+GET /api/l2/authorize?client_id=sumusic&redirect_uri=https%3A%2F%2Fapp.example.com%2Fauth%2Fcallback&response_type=code&scope=openid%20profile&state=st_8d2f4b HTTP/1.1
 Host: auth.example.com
-Cookie: sid=sid_abc.sig_xyz
+Cookie: sid=...
 ```
 
-### 2.2 Success (`302` with code)
+### 3.2 Success (`302` with code)
 
 ```http
 HTTP/1.1 302 Found
-Location: https://app.example.com/auth/callback?code=ac_01JCODEABC&state=st_8d2f4b
+Location: https://app.example.com/auth/callback?code=ac_a1b2c3d4...&state=st_8d2f4b
 ```
 
-### 2.3 Not logged in (`302` to login)
+### 3.3 Not logged in (`302` to login)
 
 ```http
 HTTP/1.1 302 Found
-Location: https://auth.example.com/login?return_to=https%3A%2F%2Fauth.example.com%2Fapi%2Fl2%2Fauthorize%3Fclient_id%3Dsumusic%26redirect_uri%3Dhttps%253A%252F%252Fapp.example.com%252Fauth%252Fcallback%26response_type%3Dcode%26scope%3Dopenid%2520profile%26state%3Dst_8d2f4b%26nonce%3Dn_01xy
+Location: https://auth.example.com/login?return_to=https%3A%2F%2Fauth.example.com%2Fapi%2Fl2%2Fauthorize%3F...
 ```
 
-### 2.4 Invalid client (`400`)
+### 3.4 Invalid client (`400`)
 
 ```json
 {
@@ -111,16 +96,18 @@ Location: https://auth.example.com/login?return_to=https%3A%2F%2Fauth.example.co
 }
 ```
 
-### 2.5 Invalid redirect URI (`400`)
+### 3.5 Invalid redirect URI (`400`)
+
+Any HTTPS URL is allowed; localhost HTTP allowed for dev. Non-HTTPS external URLs are rejected.
 
 ```json
 {
   "error": "invalid_redirect_uri",
-  "message": "redirect_uri is not allowed for this client"
+  "message": "redirect_uri must be a valid HTTPS URL"
 }
 ```
 
-### 2.6 Missing/invalid state (`400`)
+### 3.6 Missing state (`400`)
 
 ```json
 {
@@ -129,14 +116,14 @@ Location: https://auth.example.com/login?return_to=https%3A%2F%2Fauth.example.co
 }
 ```
 
-### 2.7 Logged in but no client grant (`302`)
+### 3.7 User inactive or disabled (`302`)
 
 ```http
 HTTP/1.1 302 Found
-Location: https://app.example.com/auth/callback?error=access_denied&error_description=user_not_granted_for_client&state=st_8d2f4b
+Location: https://app.example.com/auth/callback?error=access_denied&error_description=user_inactive&state=st_8d2f4b
 ```
 
-### 2.8 Client mode is `L1_AND_L2`, user has no L1 (`302`)
+### 3.8 Client requires L1, user lacks L1 (`302`)
 
 ```http
 HTTP/1.1 302 Found
@@ -145,55 +132,40 @@ Location: https://app.example.com/auth/callback?error=access_denied&error_descri
 
 ---
 
-## 3) L2 Token API: `POST /api/l2/token`
+## 4) OAuth Token: `POST /api/l2/token`
 
-Purpose:
+Content-Type: `application/x-www-form-urlencoded`
 
-- Application backend exchanges one-time code for user identity token payload
-
-Content-Type:
-
-```text
-application/x-www-form-urlencoded
-```
-
-### 3.1 Request example
+### 4.1 Request
 
 ```text
 grant_type=authorization_code&
-code=ac_01JCODEABC&
+code=ac_a1b2c3d4...&
 client_id=sumusic&
-client_secret=sec_01JSECRET&
+client_secret=sec_...&
 redirect_uri=https%3A%2F%2Fapp.example.com%2Fauth%2Fcallback
 ```
 
-### 3.2 Success (`200`)
+### 4.2 Success (`200`)
 
 ```json
 {
-  "access_token": "at_01JATOKEN",
+  "access_token": "at_30904a27db854524aaad4c9a2b71e1ae",
   "token_type": "Bearer",
   "expires_in": 600,
   "scope": "openid profile",
-  "id_token": "id_opaque_or_jwt",
+  "id_token": "id_5c19293dea42430987e6626f11c7a0f3",
   "user": {
-    "sub": "usr_01JABCDEF",
-    "email": "user@example.com",
+    "sub": "4cf0ab13-c09b-44f8-aaa0-cb8a67c788be",
+    "email": "admin@system.internal",
     "name": "Kenny"
   }
 }
 ```
 
-### 3.3 Unsupported grant (`400`)
+`user.sub` is the stable pauth user ID — use this as the IdP subject in your app.
 
-```json
-{
-  "error": "unsupported_grant_type",
-  "message": "Only authorization_code is supported"
-}
-```
-
-### 3.4 Invalid client secret (`401`)
+### 4.3 Invalid client secret (`401`)
 
 ```json
 {
@@ -202,7 +174,7 @@ redirect_uri=https%3A%2F%2Fapp.example.com%2Fauth%2Fcallback
 }
 ```
 
-### 3.5 Invalid or unknown code (`400`)
+### 4.4 Invalid / expired / reused code (`400`)
 
 ```json
 {
@@ -211,25 +183,7 @@ redirect_uri=https%3A%2F%2Fapp.example.com%2Fauth%2Fcallback
 }
 ```
 
-### 3.6 Expired code (`400`)
-
-```json
-{
-  "error": "invalid_grant",
-  "message": "Authorization code has expired"
-}
-```
-
-### 3.7 Reused code (`400`)
-
-```json
-{
-  "error": "invalid_grant",
-  "message": "Authorization code has already been used"
-}
-```
-
-### 3.8 redirect URI mismatch (`400`)
+### 4.5 redirect_uri mismatch (`400`)
 
 ```json
 {
@@ -238,7 +192,7 @@ redirect_uri=https%3A%2F%2Fapp.example.com%2Fauth%2Fcallback
 }
 ```
 
-### 3.9 User access revoked after code issued (`403`)
+### 4.6 User disabled or lost L1 after code issued (`403`)
 
 ```json
 {
@@ -249,60 +203,28 @@ redirect_uri=https%3A%2F%2Fapp.example.com%2Fauth%2Fcallback
 
 ---
 
-## 4) L2 UserInfo API (optional): `GET /api/l2/userinfo`
-
-Purpose:
-
-- App reads user profile from access token
-
-### 4.1 Success (`200`)
-
-Request:
+## 5) OAuth UserInfo: `GET /api/l2/userinfo`
 
 ```http
 GET /api/l2/userinfo HTTP/1.1
-Host: auth.example.com
-Authorization: Bearer at_01JATOKEN
+Authorization: Bearer at_30904a27db854524aaad4c9a2b71e1ae
 ```
-
-Response:
 
 ```json
 {
-  "sub": "usr_01JABCDEF",
-  "email": "user@example.com",
+  "sub": "4cf0ab13-c09b-44f8-aaa0-cb8a67c788be",
+  "email": "admin@system.internal",
   "name": "Kenny"
-}
-```
-
-### 4.2 Missing token (`401`)
-
-```json
-{
-  "error": "invalid_token",
-  "message": "Bearer token is required"
-}
-```
-
-### 4.3 Expired/revoked token (`401`)
-
-```json
-{
-  "error": "invalid_token",
-  "message": "Token is expired or revoked"
 }
 ```
 
 ---
 
-## 5) Admin APIs: Client and Grants
+## 6) Admin: Clients
 
-All admin APIs require:
+All admin routes require an admin session cookie (`sid`).
 
-- Logged in admin user
-- `Content-Type: application/json` where body exists
-
-### 5.1 Create client: `POST /api/admin/clients`
+### 6.1 Create client: `POST /api/admin/clients`
 
 Request:
 
@@ -311,11 +233,6 @@ Request:
   "clientId": "sumusic",
   "name": "SuMusic",
   "accessMode": "L2_ONLY",
-  "redirectUris": [
-    "https://app.example.com/auth/callback",
-    "https://app1.example.com/auth/callback",
-    "https://app2.example.com/auth/callback"
-  ],
   "enabled": true
 }
 ```
@@ -325,50 +242,53 @@ Success (`201`):
 ```json
 {
   "ok": true,
-  "client": {
+  "id": "uuid",
+  "clientId": "sumusic",
+  "clientSecret": "sec_d8a9f0e1..."
+}
+```
+
+`clientSecret` is returned once on create; it is also stored for admin retrieval. No `redirectUris` field.
+
+### 6.2 List clients: `GET /api/admin/clients`
+
+```json
+[
+  {
+    "id": "uuid",
     "clientId": "sumusic",
     "name": "SuMusic",
     "accessMode": "L2_ONLY",
+    "redirectUris": [],
+    "clientSecret": "sec_d8a9f0e1...",
     "enabled": true,
-    "redirectUris": [
-      "https://app.example.com/auth/callback",
-      "https://app1.example.com/auth/callback",
-      "https://app2.example.com/auth/callback"
-    ]
+    "createdAt": "2026-07-01T12:00:00.000Z",
+    "updatedAt": "2026-07-01T12:00:00.000Z"
   }
-}
+]
 ```
 
-Failure (`409`, already exists):
+### 6.3 Update client: `PATCH /api/admin/clients/:clientId`
 
 ```json
 {
-  "error": "conflict",
-  "message": "clientId already exists"
-}
-```
-
-Failure (`400`, bad redirect URI):
-
-```json
-{
-  "error": "invalid_request",
-  "message": "redirectUris must be absolute HTTPS URLs"
-}
-```
-
-### 5.2 Update client: `PATCH /api/admin/clients/:clientId`
-
-Request:
-
-```json
-{
+  "name": "SuMusic",
   "accessMode": "L1_AND_L2",
   "enabled": true
 }
 ```
 
-Success (`200`):
+### 6.4 Regenerate secret: `POST /api/admin/clients/:clientId/regenerate-secret`
+
+```json
+{
+  "ok": true,
+  "clientId": "sumusic",
+  "clientSecret": "sec_new..."
+}
+```
+
+### 6.5 Delete client: `DELETE /api/admin/clients/:clientId`
 
 ```json
 {
@@ -376,125 +296,68 @@ Success (`200`):
 }
 ```
 
-Failure (`404`):
+---
 
-```json
-{
-  "error": "not_found",
-  "message": "Client not found"
-}
-```
+## 7) Admin: Users and permissions
 
-### 5.3 List clients: `GET /api/admin/clients`
+### 7.1 List users: `GET /api/admin/users`
 
-Success (`200`):
+Optional query: `?status=pending|active|disabled` (omit or `all` for every user).
 
 ```json
 [
   {
-    "clientId": "sumusic",
-    "name": "SuMusic",
-    "accessMode": "L1_AND_L2",
-    "enabled": true,
-    "redirectUris": [
-      "https://app.example.com/auth/callback",
-      "https://app1.example.com/auth/callback",
-      "https://app2.example.com/auth/callback"
-    ]
+    "id": "4cf0ab13-c09b-44f8-aaa0-cb8a67c788be",
+    "email": "admin@system.internal",
+    "name": "Kenny",
+    "role": "admin",
+    "status": "active",
+    "createdAt": "...",
+    "passkeyCount": 1,
+    "hasPendingInvite": false,
+    "l1Enabled": true
   }
 ]
 ```
 
-### 5.4 Set user L1 grant: `PUT /api/admin/users/:userId/l1-access`
+### 7.2 Update user: `PATCH /api/admin/users/:id`
 
-Request:
+Rename:
+
+```json
+{ "name": "Kenny" }
+```
+
+Disable:
+
+```json
+{ "status": "disabled" }
+```
+
+### 7.3 Set permissions: `PUT /api/admin/users/:id/permissions`
+
+Only L1 gateway access is managed by pauth.
 
 ```json
 {
-  "enabled": false
+  "l1Enabled": true
 }
 ```
 
-Success (`200`):
-
-```json
-{
-  "ok": true,
-  "userId": "usr_01JABCDEF",
-  "l1Access": {
-    "enabled": false
-  }
-}
-```
-
-Failure (`404`):
-
-```json
-{
-  "error": "not_found",
-  "message": "User not found"
-}
-```
-
-### 5.5 Set user client grant: `PUT /api/admin/users/:userId/client-access/:clientId`
-
-Request:
-
-```json
-{
-  "enabled": true,
-  "appRole": "member"
-}
-```
-
-Success (`200`):
+Response:
 
 ```json
 {
   "ok": true,
-  "userId": "usr_01JABCDEF",
-  "clientId": "sumusic",
-  "grant": {
-    "enabled": true,
-    "appRole": "member"
+  "permissions": {
+    "l1Enabled": true
   }
 }
 ```
 
-Failure (`404`, user/client):
+### 7.4 Delete user: `DELETE /api/admin/users/:id`
 
-```json
-{
-  "error": "not_found",
-  "message": "User or client not found"
-}
-```
-
-### 5.6 List user grants: `GET /api/admin/users/:userId/client-access`
-
-Success (`200`):
-
-```json
-{
-  "userId": "usr_01JABCDEF",
-  "grants": [
-    {
-      "clientId": "sumusic",
-      "enabled": true,
-      "appRole": "member"
-    },
-    {
-      "clientId": "s2",
-      "enabled": false,
-      "appRole": null
-    }
-  ]
-}
-```
-
-### 5.7 Revoke user grant: `DELETE /api/admin/users/:userId/client-access/:clientId`
-
-Success (`200`):
+Cannot delete yourself or the last active admin.
 
 ```json
 {
@@ -504,37 +367,80 @@ Success (`200`):
 
 ---
 
-## 6) HTTP Status and Error Code Reference
+## 8) Admin: Invites (pre-provisioned users)
 
-Common status codes:
+### 8.1 Create invite: `POST /api/admin/invites`
 
-- `200` success
-- `201` created
-- `302` browser redirect (L1/L2 interactive flow)
-- `400` invalid request / invalid grant
-- `401` authentication failed (`invalid_client`, `invalid_token`)
-- `403` authenticated but not authorized (`access_denied`)
-- `404` not found
-- `409` conflict
+No email required. Name and optional L1 only. User becomes `active` after Passkey registration (no second approval).
 
-Common error codes:
+```json
+{
+  "name": "Eason",
+  "role": "user",
+  "l1Enabled": false
+}
+```
 
-- `invalid_request`
-- `invalid_client`
-- `invalid_redirect_uri`
-- `unsupported_grant_type`
-- `invalid_grant`
-- `invalid_token`
-- `access_denied`
-- `not_found`
-- `conflict`
+Success:
+
+```json
+{
+  "ok": true,
+  "url": "https://auth.example.com/invite/abc123...",
+  "token": "abc123...",
+  "expiresAt": "2026-07-08T12:00:00.000Z",
+  "userId": "uuid"
+}
+```
+
+User visits `/invite/:token`, registers Passkey, status becomes `active`.
+
+### 8.2 Invite info: `GET /api/invite/:token`
+
+```json
+{
+  "name": "Eason",
+  "role": "user"
+}
+```
 
 ---
 
-## 7) Notes for Integrators
+## 9) Standard app env config
 
-- `state` is required for L2 authorize and must be verified by client backend.
-- `redirect_uri` must be exact-match with registered URI.
-- Authorization code should be single-use and short-lived (recommended 60 seconds).
-- Application should create its own local session after successful token exchange.
-- L1 and L2 can be used independently, or together (`L1_AND_L2` mode).
+Copy from admin **应用管理 → 复制配置**:
+
+```text
+PAUTH_CLIENT_ID=sumusic
+PAUTH_CLIENT_SECRET=sec_...
+PAUTH_AUTHORIZE_URL=https://auth.example.com/api/l2/authorize
+PAUTH_TOKEN_URL=https://auth.example.com/api/l2/token
+```
+
+---
+
+## 10) Integrator notes
+
+- **`state`** is required; verify it in your callback handler.
+- **`redirect_uri`** must match exactly between authorize and token requests. Any HTTPS URL is accepted (no per-client registration).
+- Authorization codes and access tokens expire in **600 seconds**; codes are single-use.
+- After token exchange, create your **app-local session** (same pattern as Google OAuth).
+- **`user.sub`** is the stable cross-app user identifier from pauth.
+- All **active** pauth users may OAuth into any registered client. Use `accessMode: L1_AND_L2` only if the app also requires L1 gateway access.
+- App-specific roles and feature access are managed inside each application, not in pauth.
+- Passkey login happens on the auth host; apps integrate via HTTP redirects only.
+
+---
+
+## 11) Error code reference
+
+| HTTP | error | Typical cause |
+|------|-------|----------------|
+| 400 | `invalid_request` | Missing/invalid parameters |
+| 400 | `invalid_client` | Unknown client_id (authorize) |
+| 400 | `invalid_redirect_uri` | Non-HTTPS redirect (except localhost) |
+| 400 | `invalid_grant` | Bad/expired/reused code or redirect mismatch |
+| 400 | `unsupported_grant_type` | Not `authorization_code` |
+| 401 | `invalid_client` | Wrong client_secret |
+| 401 | `invalid_token` | Missing/expired Bearer token |
+| 403 | `access_denied` | User disabled or lost L1 between authorize and token |

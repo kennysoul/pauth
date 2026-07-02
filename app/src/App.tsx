@@ -4,10 +4,14 @@ import { api, type SystemState } from './api';
 import { SetupPage } from './pages/SetupPage';
 import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
+import { LinkDevicePage } from './pages/LinkDevicePage';
 import { AdminLayout } from './pages/admin/AdminLayout';
 import { AdminUsersPage } from './pages/admin/AdminUsersPage';
+import { AdminClientsPage } from './pages/admin/AdminClientsPage';
 import { AdminConfigPage } from './pages/admin/AdminConfigPage';
+import { AdminIntegrationPage } from './pages/admin/AdminIntegrationPage';
 import { AdminLogsPage } from './pages/admin/AdminLogsPage';
+import { InvitePage } from './pages/InvitePage';
 
 export function App() {
   const [state, setState] = useState<SystemState | null>(null);
@@ -58,10 +62,14 @@ export function App() {
           )
         }
       />
+      <Route path="/invite/:token" element={<InvitePage />} />
+      <Route path="/link-device" element={<LinkDevicePage />} />
       <Route path="/admin" element={<AdminLayout />}>
-        <Route index element={<AdminUsersPage status="all" title="用户概览" />} />
-        <Route path="users" element={<AdminUsersPage status="all" title="用户管理" />} />
-        <Route path="pending" element={<AdminUsersPage status="pending" title="待审批" />} />
+        <Route index element={<Navigate to="/admin/users" replace />} />
+        <Route path="users" element={<AdminUsersPage />} />
+        <Route path="pending" element={<Navigate to="/admin/users" replace />} />
+        <Route path="clients" element={<AdminClientsPage />} />
+        <Route path="integration" element={<AdminIntegrationPage />} />
         <Route path="config" element={<AdminConfigPage />} />
         <Route path="logs" element={<AdminLogsPage />} />
       </Route>
