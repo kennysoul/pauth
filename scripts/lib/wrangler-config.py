@@ -88,13 +88,7 @@ def build_desired(args: argparse.Namespace) -> dict[str, Any]:
                 "preview_id": args.kv_preview_id,
             }
         ],
-        "routes": [
-            {
-                "pattern": args.auth_host,
-                "zone_name": args.zone_name,
-                "custom_domain": True,
-            }
-        ],
+        # 自定义域名由 bind-custom-domain.py 绑定；勿写 routes，避免 wrangler deploy 需 Zone Workers Routes 权限
         "observability": {"enabled": True},
     }
     if args.account_id:
@@ -130,11 +124,6 @@ def diff_summary(existing: dict[str, Any], desired: dict[str, Any]) -> list[str]
     if ex_prev != de_prev:
         lines.append(f"kv.preview_id: {ex_prev or '(空)'} → {de_prev}")
 
-    ex_route = ((existing.get("routes") or [{}])[0]).get("pattern", "")
-    de_route = ((desired.get("routes") or [{}])[0]).get("pattern", "")
-    if ex_route != de_route:
-        lines.append(f"routes.pattern: {ex_route or '(空)'} → {de_route}")
-
     if existing.get("name") != desired.get("name"):
         lines.append(f"name: {existing.get('name')} → {desired.get('name')}")
 
@@ -150,11 +139,14 @@ def merge_config(existing: dict[str, Any], desired: dict[str, Any]) -> dict[str,
     merged = json.loads(json.dumps(existing))
     merged["d1_databases"] = desired["d1_databases"]
     merged["kv_namespaces"] = desired["kv_namespaces"]
+    merged.pop("routes", None)
     for key in ("$schema", "main", "compatibility_date", "compatibility_flags", "assets", "observability"):
         if key in desired:
             merged[key] = desired[key]
     if desired.get("account_id"):
         merged["account_id"] = desired["account_id"]
+    merged["name"] = desired["name"]
+    merged["vars"] = desired["vars"]
     return merged
 
 

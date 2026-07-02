@@ -5,7 +5,7 @@
 #   预检 1/3  本机工具（node / git …）
 #   预检 2/3  Cloudflare 登录与 API 权限
 #   预检 3/3  Git 验证 GitHub 仓库 → clone/pull 源码 → 使用仓库内 scripts/lib
-#   全部通过后继续 D1 / KV / 部署
+#   预检 4/4  DNS / Worker 冲突 / 域名绑定 API 权限
 #
 # 单文件下载即可运行；私有仓库在预检 3 会引导 GitHub 登录（gh auth login）。
 #
@@ -21,9 +21,6 @@ set -euo pipefail
 DEFAULT_REPO="https://github.com/kennysoul/pauth.git"
 DEFAULT_BRANCH="main"
 DEFAULT_INSTALL_DIR="${HOME}/pauth"
-DEFAULT_WORKER_NAME="passkey-auth"
-DEFAULT_D1_NAME="passkey-auth-db"
-DEFAULT_KV_TITLE="CHALLENGES"
 DEFAULT_RP_NAME="Kass Auth"
 DEFAULT_DB_LOCATION="apac"
 
@@ -33,9 +30,9 @@ INSTALL_DIR="$DEFAULT_INSTALL_DIR"
 ZONE_NAME=""
 AUTH_HOST=""
 RP_NAME="$DEFAULT_RP_NAME"
-WORKER_NAME="$DEFAULT_WORKER_NAME"
-D1_NAME="$DEFAULT_D1_NAME"
-KV_TITLE="$DEFAULT_KV_TITLE"
+WORKER_NAME=""
+D1_NAME=""
+KV_TITLE=""
 DB_LOCATION="$DEFAULT_DB_LOCATION"
 SESSION_SECRET=""
 DEPLOY_MODE=""
@@ -46,6 +43,10 @@ NON_INTERACTIVE=0
 ROTATE_SECRET=0
 GIT_FIRST_DEPLOY=0
 SKIP_DOMAIN_BIND=0
+WORKER_NAME_EXPLICIT=0
+D1_NAME_EXPLICIT=0
+KV_TITLE_EXPLICIT=0
+ALLOW_WORKER_OVERWRITE=0
 
 CONFIG_PY=""
 BIND_DOMAIN_PY=""
@@ -72,7 +73,7 @@ Usage: full-deploy-cloudflare.sh [options]
 
 单文件 Cloudflare 全量部署。预检通过后才执行 D1 / KV / build / deploy。
 
-预检顺序：本机工具 → Cloudflare 权限 → Git 拉取源码（含 scripts/lib）
+预检顺序：本机工具 → Cloudflare 基础权限 → Git 拉源码 → 部署目标（DNS/Worker/域名权限）
 
 Options:
   --repo URL              GitHub 仓库（默认 kennysoul/pauth）
@@ -81,13 +82,14 @@ Options:
   --zone DOMAIN           根域名，Cloudflare 托管（--yes 时必填）
   --auth-host HOST        认证域名（默认 auth.<zone>）
   --rp-name NAME          Passkey 显示名
-  --worker-name NAME      Worker 名称
-  --d1-name NAME          D1 数据库名
-  --kv-title TITLE        KV namespace 标题
+  --worker-name NAME      Worker 名称（默认按 auth 域名自动生成，如 pauth-auth-kass-cc）
+  --d1-name NAME          D1 数据库名（默认 pauth-<zone>-db）
+  --kv-title TITLE        KV namespace 标题（默认 CHALLENGES-pauth-<zone>）
   --db-location LOC       D1 区域（默认 apac）
   --session-secret STR    SESSION_SECRET（留空自动生成）
   --deploy-mode MODE      local | git
   --config-policy POLICY  keep | merge-bindings | overwrite
+  --allow-worker-overwrite  允许部署到已绑定其他域名的 Worker（危险）
   --rotate-secret         强制更新 .dev.vars 中的 SESSION_SECRET
   --git-first-deploy      Git 模式下额外执行一次本地 deploy
   --skip-domain-bind      跳过自定义域名绑定
@@ -224,9 +226,9 @@ parse_args() {
       --zone) ZONE_NAME="$2"; shift 2 ;;
       --auth-host) AUTH_HOST="$2"; shift 2 ;;
       --rp-name) RP_NAME="$2"; shift 2 ;;
-      --worker-name) WORKER_NAME="$2"; shift 2 ;;
-      --d1-name) D1_NAME="$2"; shift 2 ;;
-      --kv-title) KV_TITLE="$2"; shift 2 ;;
+      --worker-name) WORKER_NAME="$2"; WORKER_NAME_EXPLICIT=1; shift 2 ;;
+      --d1-name) D1_NAME="$2"; D1_NAME_EXPLICIT=1; shift 2 ;;
+      --kv-title) KV_TITLE="$2"; KV_TITLE_EXPLICIT=1; shift 2 ;;
       --db-location) DB_LOCATION="$2"; shift 2 ;;
       --session-secret) SESSION_SECRET="$2"; shift 2 ;;
       --deploy-mode) DEPLOY_MODE="$2"; shift 2 ;;
@@ -235,6 +237,7 @@ parse_args() {
       --git-first-deploy) GIT_FIRST_DEPLOY=1; shift ;;
       --skip-domain-bind) SKIP_DOMAIN_BIND=1; shift ;;
       --skip-clone) SKIP_CLONE=1; shift ;;
+      --allow-worker-overwrite) ALLOW_WORKER_OVERWRITE=1; shift ;;
       --yes|-y) ASSUME_YES=1; NON_INTERACTIVE=1; shift ;;
       -h|--help) usage; exit 0 ;;
       *) die "未知参数: $1（用 --help 查看）" ;;
@@ -336,6 +339,7 @@ apply_config_defaults() {
   RP_ID="${RP_ID:-$ZONE_NAME}"
   ORIGIN="${ORIGIN:-https://${AUTH_HOST}}"
   COOKIE_DOMAIN="${COOKIE_DOMAIN:-.${ZONE_NAME}}"
+  derive_resource_names
 
   if [[ -z "$SESSION_SECRET" ]]; then
     if command -v openssl >/dev/null 2>&1; then
@@ -346,6 +350,28 @@ apply_config_defaults() {
     info "已自动生成 SESSION_SECRET"
   fi
   [[ ${#SESSION_SECRET} -ge 32 ]] || die "SESSION_SECRET 至少 32 字符"
+}
+
+slugify() {
+  echo "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g'
+}
+
+derive_resource_names() {
+  local zone_slug host_slug
+  zone_slug="$(slugify "$ZONE_NAME")"
+  host_slug="$(slugify "$AUTH_HOST")"
+
+  if [[ "$WORKER_NAME_EXPLICIT" -eq 0 ]]; then
+    WORKER_NAME="pauth-${host_slug}"
+  fi
+  if [[ "$D1_NAME_EXPLICIT" -eq 0 ]]; then
+    D1_NAME="pauth-${zone_slug}-db"
+  fi
+  if [[ "$KV_TITLE_EXPLICIT" -eq 0 ]]; then
+    KV_TITLE="CHALLENGES-pauth-${zone_slug}"
+  fi
+
+  info "资源命名: Worker=${WORKER_NAME}  D1=${D1_NAME}  KV=${KV_TITLE}"
 }
 
 resolve_account_id() {
@@ -464,6 +490,68 @@ preflight_check_github() {
   ok "GitHub 预检通过"
 }
 
+preflight_check_deploy_target() {
+  phase "预检 4/4 · 部署目标（DNS / Worker / 域名权限）"
+
+  [[ "$GIT_SOURCE_READY" -eq 1 ]] || die "内部错误: 源码未就绪"
+  use_repo_helpers
+
+  local preflight_args=(
+    --hostname "$AUTH_HOST"
+    --zone-name "$ZONE_NAME"
+    --worker-name "$WORKER_NAME"
+    --preflight
+  )
+  [[ "$SKIP_DOMAIN_BIND" -eq 1 ]] && preflight_args+=(--skip-domain-bind)
+  [[ "$ALLOW_WORKER_OVERWRITE" -eq 1 ]] && preflight_args+=(--allow-overwrite)
+
+  info "Worker=${WORKER_NAME}  域名=${AUTH_HOST}  zone=${ZONE_NAME}"
+  python3 "$BIND_DOMAIN_PY" "${preflight_args[@]}"
+  ok "部署目标预检通过"
+}
+
+validate_wrangler_config_policy() {
+  local cfg="$1"
+  [[ -f "$cfg" ]] || return 0
+  [[ "$CONFIG_POLICY" == "keep" ]] || return 0
+
+  local cfg_worker cfg_auth
+  read -r cfg_worker cfg_auth <<<"$(python3 -c "
+import json, sys
+from pathlib import Path
+
+def strip_jsonc(t):
+    out, i, ins, esc = [], 0, False, False
+    while i < len(t):
+        c = t[i]
+        if ins:
+            out.append(c)
+            if esc: esc = False
+            elif c == '\\\\': esc = True
+            elif c == '\"': ins = False
+            i += 1; continue
+        if c == '\"': ins = True; out.append(c); i += 1; continue
+        if c == '/' and i+1 < len(t) and t[i+1] == '/':
+            while i < len(t) and t[i] not in '\\n': i += 1
+            continue
+        out.append(c); i += 1
+    return ''.join(out)
+
+d = json.loads(strip_jsonc(Path(sys.argv[1]).read_text(encoding='utf-8')))
+print(d.get('name', ''), (d.get('vars') or {}).get('AUTH_HOST', ''))
+" "$cfg")"
+
+  if [[ -n "$cfg_worker" && "$cfg_worker" != "$WORKER_NAME" ]]; then
+    die "wrangler 配置中 Worker 名为「${cfg_worker}」，与目标「${WORKER_NAME}」不一致。
+--config-policy keep 会部署到「${cfg_worker}」，可能覆盖其它站点。
+请改用 --config-policy merge-bindings 或 overwrite；
+或 --worker-name ${cfg_worker} 明确升级原 Worker。"
+  fi
+  if [[ -n "$cfg_auth" && "$cfg_auth" != "$AUTH_HOST" ]]; then
+    warn "配置中 AUTH_HOST=${cfg_auth}，与本次 ${AUTH_HOST} 不同；keep 模式将保留旧值"
+  fi
+}
+
 use_repo_helpers() {
   [[ "$GIT_SOURCE_READY" -eq 1 ]] || activate_repo_helpers
 }
@@ -572,7 +660,6 @@ out = {
     'ORIGIN': vars.get('ORIGIN', ''),
     'COOKIE_DOMAIN': vars.get('COOKIE_DOMAIN', ''),
     'ZONE_NAME': route.get('zone_name', ''),
-    'WORKER_NAME': cfg.get('name', ''),
 }
 for k, v in out.items():
     if v:
@@ -595,19 +682,19 @@ verify_auth_zone() {
 bind_auth_domain() {
   [[ "$SKIP_DOMAIN_BIND" -eq 1 ]] && return 0
   info "绑定 ${AUTH_HOST} → Worker ${WORKER_NAME}"
-  if python3 "$BIND_DOMAIN_PY" \
-    --hostname "$AUTH_HOST" \
-    --zone-name "$ZONE_NAME" \
-    --worker-name "$WORKER_NAME"; then
+  local bind_args=(
+    --hostname "$AUTH_HOST"
+    --zone-name "$ZONE_NAME"
+    --worker-name "$WORKER_NAME"
+  )
+  [[ "$ALLOW_WORKER_OVERWRITE" -eq 1 ]] && bind_args+=(--allow-overwrite)
+  if python3 "$BIND_DOMAIN_PY" "${bind_args[@]}"; then
     return 0
   fi
   warn "首次绑定失败，先部署 Worker 再重试…"
   npx wrangler deploy -c "$WRANGLER_CFG"
-  python3 "$BIND_DOMAIN_PY" \
-    --hostname "$AUTH_HOST" \
-    --zone-name "$ZONE_NAME" \
-    --worker-name "$WORKER_NAME" \
-    || die "无法绑定 ${AUTH_HOST}，请检查 Cloudflare 权限（Workers + DNS + Zone）"
+  python3 "$BIND_DOMAIN_PY" "${bind_args[@]}" \
+    || die "无法绑定 ${AUTH_HOST}，请检查 Cloudflare 权限与 DNS 记录"
 }
 
 print_git_instructions() {
@@ -663,6 +750,8 @@ run_provision() {
     EXISTING_CFG="$WRANGLER_PROD"
   fi
   load_vars_from_wrangler "$EXISTING_CFG"
+  derive_resource_names
+  validate_wrangler_config_policy "$WRANGLER_LOCAL"
 
   if [[ "$NON_INTERACTIVE" -eq 0 ]]; then
     echo ""
@@ -809,11 +898,40 @@ run_deploy() {
   WRANGLER_CFG="$WRANGLER_LOCAL"
   [[ -f "$WRANGLER_CFG" ]] || die "缺少 $WRANGLER_CFG"
 
+  # 移除 wrangler routes（域名由 bind-custom-domain.py 绑定，避免 deploy 需 Workers Routes 权限）
+  python3 -c "
+import json, sys
+from pathlib import Path
+
+def strip_jsonc(t):
+    out, i, ins, esc = [], 0, False, False
+    while i < len(t):
+        c = t[i]
+        if ins:
+            out.append(c)
+            if esc: esc = False
+            elif c == '\\\\': esc = True
+            elif c == '\"': ins = False
+            i += 1; continue
+        if c == '\"': ins = True; out.append(c); i += 1; continue
+        if c == '/' and i+1 < len(t) and t[i+1] == '/':
+            while i < len(t) and t[i] not in '\\n': i += 1
+            continue
+        out.append(c); i += 1
+    return ''.join(out)
+
+p = Path(sys.argv[1])
+text = p.read_text(encoding='utf-8')
+cfg = json.loads(strip_jsonc(text))
+if cfg.pop('routes', None) is not None:
+    p.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + '\\n', encoding='utf-8')
+" "$WRANGLER_CFG" 2>/dev/null || true
+
   info "上传 SESSION_SECRET"
   printf '%s' "$SESSION_SECRET" | npx wrangler secret put SESSION_SECRET -c "$WRANGLER_CFG"
 
   info "D1 迁移（remote）"
-  npx wrangler d1 migrations apply DB --remote -c "$WRANGLER_CFG"
+  npx wrangler d1 migrations apply DB --remote -c "$WRANGLER_CFG" --yes
 
   RUN_LOCAL_DEPLOY=0
   if [[ "$DEPLOY_MODE" == "local" ]]; then
@@ -844,10 +962,11 @@ main() {
 
   preflight_check_cloudflare
   preflight_check_github
+  preflight_check_deploy_target
 
   echo ""
-  ok "三项预检全部通过"
-  info "目标: https://${AUTH_HOST}  仓库: ${REPO_URL} (${GIT_BRANCH})"
+  ok "四项预检全部通过"
+  info "Worker: ${WORKER_NAME}  目标: https://${AUTH_HOST}"
   echo ""
 
   run_provision

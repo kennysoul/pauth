@@ -255,7 +255,6 @@ out = {
     'ORIGIN': vars.get('ORIGIN', ''),
     'COOKIE_DOMAIN': vars.get('COOKIE_DOMAIN', ''),
     'ZONE_NAME': route.get('zone_name', ''),
-    'WORKER_NAME': cfg.get('name', ''),
 }
 for k, v in out.items():
     if v:
@@ -695,7 +694,7 @@ info "上传 SESSION_SECRET 到 Worker"
 printf '%s' "$SESSION_SECRET" | npx wrangler secret put SESSION_SECRET -c "$WRANGLER_CFG"
 
 info "应用 D1 迁移（remote）"
-npx wrangler d1 migrations apply DB --remote -c "$WRANGLER_CFG"
+npx wrangler d1 migrations apply DB --remote -c "$WRANGLER_CFG" --yes
 
 # ── Deploy ──────────────────────────────────────────────────────────────────
 
