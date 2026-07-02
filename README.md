@@ -259,15 +259,18 @@ Visit `https://auth.kass.cc/setup` and register the **root** admin Passkey.
 
 ### Bootstrap script (full local deploy)
 
-One-shot local deploy (D1/KV, config, build, migrate, deploy, domain bind). Uses `scripts/lib/*.py`:
+One-shot local deploy (D1/KV, config, build, migrate, deploy, domain bind). **Self-contained single file** — helpers embedded; clones repo automatically.
 
 ```bash
-npm run deploy:full
-# same as:
-npm run deploy:bootstrap
+# Download only this script (e.g. to ~/Downloads), then run:
+curl -fsSL https://raw.githubusercontent.com/kennysoul/pauth/main/scripts/full-deploy-cloudflare.sh -o full-deploy.sh
+chmod +x full-deploy.sh
+npx wrangler login
+./full-deploy.sh --zone kass.cc --auth-host auth.kass.cc --yes
 
+# From repo checkout:
+npm run deploy:full
 ./scripts/full-deploy-cloudflare.sh --zone kass.cc --auth-host auth.kass.cc --yes
-./scripts/full-deploy-cloudflare.sh --dir . --skip-clone --deploy-mode local --yes
 ```
 
 Split scripts (badge / CI): `provision-cloudflare.sh` + `deploy-cloudflare.sh` — see [Deploy to Cloudflare badge](#deploy-to-cloudflare-badge).
