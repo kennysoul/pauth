@@ -259,9 +259,20 @@ Visit `https://auth.kass.cc/setup` and register the **root** admin Passkey.
 
 ### Bootstrap script (full local deploy)
 
-Recommended for a private machine one-shot deploy: creates D1 + KV, config, build, migrate, deploy, and auto-binds `AUTH_HOST`.
+One-shot local deploy (D1/KV, config, build, migrate, deploy, domain bind). Uses `scripts/lib/*.py`:
 
-**Single-file download** (fetches shared library if needed; clones repo):
+```bash
+npm run deploy:full
+# same as:
+npm run deploy:bootstrap
+
+./scripts/full-deploy-cloudflare.sh --zone kass.cc --auth-host auth.kass.cc --yes
+./scripts/full-deploy-cloudflare.sh --dir . --skip-clone --deploy-mode local --yes
+```
+
+Split scripts (badge / CI): `provision-cloudflare.sh` + `deploy-cloudflare.sh` — see [Deploy to Cloudflare badge](#deploy-to-cloudflare-badge).
+
+**Single-file download** (split `deploy-cloudflare.sh`; fetches `deploy-common.sh` if needed):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kennysoul/pauth/main/scripts/deploy-cloudflare.sh -o bootstrap-pauth.sh
@@ -270,21 +281,16 @@ npx wrangler login
 ./bootstrap-pauth.sh --zone kass.cc --auth-host auth.kass.cc --yes
 ```
 
-**From repo:**
+**From repo (full local):**
 
 ```bash
-npm run deploy:bootstrap
-# or provision only:
-npm run provision:cloudflare -- --dir . --skip-clone --zone kass.cc --yes
+npm run deploy:full
 
-# Non-interactive — local deploy
-./scripts/deploy-cloudflare.sh --zone kass.cc --auth-host auth.kass.cc --dir ~/pauth --yes
-
-# Git mode — generate wrangler.production.jsonc + wrangler.jsonc for Builds
-./scripts/deploy-cloudflare.sh --zone kass.cc --deploy-mode git --config-policy merge-bindings --yes
+# Git mode — also generate wrangler.production.jsonc for Builds
+./scripts/full-deploy-cloudflare.sh --zone kass.cc --deploy-mode git --config-policy merge-bindings --yes
 
 # Upgrade — keep existing wrangler config unchanged
-./scripts/deploy-cloudflare.sh --dir ~/pauth --skip-clone --config-policy keep --yes
+./scripts/full-deploy-cloudflare.sh --dir ~/pauth --skip-clone --config-policy keep --yes
 ```
 
 Still required: Node.js 20+, git, python3, curl, and Cloudflare auth.

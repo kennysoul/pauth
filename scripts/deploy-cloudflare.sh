@@ -60,7 +60,7 @@ Options:
   --yes, -y               Non-interactive
   -h, --help
 
-See also: provision-cloudflare.sh (resources only, for Deploy to Cloudflare badge)
+See also: full-deploy-cloudflare.sh (full local one-shot, uses scripts/lib/*.py)
 EOF
 }
 

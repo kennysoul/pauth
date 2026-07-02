@@ -144,7 +144,9 @@ Admin UI pages: **用户管理** (incl. open registration), **应用管理**, **
 
 ### 3.5 Deploy tooling
 
-Script `scripts/deploy-cloudflare.sh` (`npm run deploy:bootstrap`) — full bootstrap.
+Script `scripts/full-deploy-cloudflare.sh` (`npm run deploy:full`) — **full local bootstrap** (uses `scripts/lib/*.py`).
+
+Script `scripts/deploy-cloudflare.sh` — thin wrapper (provision + deploy via `deploy-common.sh`).
 
 Script `scripts/provision-cloudflare.sh` (`npm run provision:cloudflare`) — **upper half only** (D1/KV + wrangler configs); pair with [Deploy to Cloudflare](https://developers.cloudflare.com/workers/platform/deploy-buttons/) badge + `npm run deploy:workers`.
 
