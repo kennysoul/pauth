@@ -538,7 +538,7 @@ load_vars_from_wrangler() {
   local file="$1"
   [[ -f "$file" ]] || return 0
   python3 -c "
-import json, sys
+import json, shlex, sys
 from pathlib import Path
 
 def strip_jsonc_comments(text: str) -> str:
@@ -576,7 +576,7 @@ out = {
 }
 for k, v in out.items():
     if v:
-        print(f'{k}={v}')
+        print(f'{k}={shlex.quote(str(v))}')
 " "$file" > /tmp/pauth-wrangler-load.env 2>/dev/null || return 0
   # shellcheck disable=SC1091
   source /tmp/pauth-wrangler-load.env
