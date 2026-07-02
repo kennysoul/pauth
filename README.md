@@ -230,33 +230,43 @@ npm run deploy
 
 ### One-shot bootstrap script (new machine / fresh VPS)
 
-From any directory, run the interactive installer — it will create D1 + KV, clone or update the GitHub repo, write `wrangler.local.jsonc`, migrate, and deploy:
+Interactive installer: provisions D1 + KV, writes wrangler config (with merge/keep on upgrade), then deploys locally **or** prepares GitHub Builds.
 
 ```bash
-# Interactive
-curl -fsSL https://raw.githubusercontent.com/kennysoul/pauth/main/scripts/deploy-cloudflare.sh -o deploy-cloudflare.sh
-chmod +x deploy-cloudflare.sh
-./deploy-cloudflare.sh
-
-# Or from a cloned repo
 npm run deploy:bootstrap
 
-# Non-interactive example
-./scripts/deploy-cloudflare.sh \
-  --zone kass.cc \
-  --auth-host auth.kass.cc \
-  --repo https://github.com/kennysoul/pauth.git \
-  --dir ~/pauth \
-  --yes
+# Non-interactive — local deploy, merge existing wrangler.local.jsonc
+./scripts/deploy-cloudflare.sh --zone kass.cc --auth-host auth.kass.cc --dir ~/pauth --yes
+
+# Git mode — generate wrangler.production.jsonc, skip local deploy
+./scripts/deploy-cloudflare.sh --zone kass.cc --deploy-mode git --config-policy merge-bindings --yes
+
+# Upgrade run — keep your wrangler vars, only refresh if you choose
+./scripts/deploy-cloudflare.sh --dir ~/pauth --skip-clone --config-policy keep --yes
 ```
 
-**Before running:**
+**Wrangler config files**
 
-1. `npx wrangler login` (or export `CLOUDFLARE_API_TOKEN` with Workers + D1 + KV permissions)
-2. Apex domain must be on your Cloudflare account
-3. Private repo: use `git@github.com:you/pauth.git` or HTTPS with a Personal Access Token
+| File | Purpose | Git |
+|------|---------|-----|
+| `wrangler.local.jsonc` | Local `wrangler deploy` / dev | gitignored |
+| `wrangler.production.jsonc` | Cloudflare Git Builds CI | commit to private repo |
 
-The script is idempotent for D1/KV (reuses existing resources with the same names). Re-runs `git pull`, `npm run build`, migrations, and deploy.
+When a config file already exists, the script prompts:
+
+1. **保留** — do not overwrite (version bump, config unchanged)
+2. **仅同步 D1/KV ID** — keep your `vars`, update resource bindings
+3. **完全覆盖** — rewrite from current parameters
+
+**Before running:** `npx wrangler login` (or `CLOUDFLARE_API_TOKEN`), domain on Cloudflare, private repo access for clone.
+
+The script verifies that `--zone` / `AUTH_HOST` belong to your Cloudflare account, then **force-binds** `auth.example.com` to the `passkey-auth` Worker (overriding an existing Worker or DNS record on that hostname). Use `--skip-domain-bind` to skip.
+
+**Git Builds** (after `--deploy-mode git`): connect repo in Dashboard; deploy command:
+
+`npx wrangler deploy --config wrangler.production.jsonc`
+
+See `wrangler.production.jsonc.example` for shape. `SESSION_SECRET` stays in Cloudflare Secrets, not in the file.
 
 ## Production vars example
 
