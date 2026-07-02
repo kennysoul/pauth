@@ -50,6 +50,7 @@ KV_TITLE_EXPLICIT=0
 ALLOW_WORKER_OVERWRITE=0
 INSTALL_DIR_EXPLICIT=0
 PAUTH_DEPLOY_MODE=""
+PAUTH_NO_WORKERS_ROUTES=0
 
 CONFIG_PY=""
 BIND_DOMAIN_PY=""
@@ -69,6 +70,107 @@ warn()  { printf '%b\n' "${YELLOW}!${NC} $*"; }
 die()   { printf '%b\n' "${RED}✗${NC} $*" >&2; exit 1; }
 ok()    { printf '%b\n' "${GREEN}✓${NC} $*"; }
 phase() { printf '\n%b\n' "${CYAN}── $* ──${NC}"; }
+
+# npx --yes 避免首次运行时的 “Ok to proceed?” 交互卡住
+wrangler_cmd() {
+  npx --yes wrangler "$@"
+}
+
+warn_manual_domain_for_no_routes() {
+  echo ""
+  warn "当前登录缺少 Workers Routes 写权限，脚本无法自动强制绑定/覆盖域名"
+  warn "若 ${AUTH_HOST:-认证域名} 已被其他 Worker 或 DNS 记录占用，请先到 Cloudflare 手动处理："
+  echo "  · Dashboard → Workers & Pages → 目标 Worker → Settings → Domains"
+  echo "  · 或 DNS → 删除/修改冲突的 A/CNAME 记录"
+  echo "  · 完成后重新运行本脚本"
+  echo ""
+}
+
+whoami_looks_logged_in() {
+  local text="$1"
+  [[ -n "$text" ]] || return 1
+  if printf '%s' "$text" | grep -qiE 'not authenticated|not logged in|please run .wrangler login'; then
+    return 1
+  fi
+  if printf '%s' "$text" | grep -qiE 'logged in|You are logged in|API Token'; then
+    return 0
+  fi
+  return 1
+}
+
+run_wrangler_whoami() {
+  local log rc
+  log="$(mktemp "${TMPDIR:-/tmp}/pauth-whoami.XXXXXX")"
+  info "Wrangler whoami"
+  wrangler_cmd whoami 2>&1 | tee "$log"
+  rc="${PIPESTATUS[0]}"
+  WRANGLER_WHOAMI="$(cat "$log")"
+  rm -f "$log"
+  if [[ "$rc" -ne 0 ]]; then
+    return 1
+  fi
+  whoami_looks_logged_in "$WRANGLER_WHOAMI"
+}
+
+ensure_wrangler_oauth_login() {
+  echo ""
+  warn "未检测到 Cloudflare 登录"
+  echo ""
+  echo "一般用户推荐 OAuth 浏览器登录："
+  echo "  1) 运行 wrangler login，在浏览器完成 Cloudflare 授权"
+  echo "  2) 返回终端后脚本将继续部署"
+  echo ""
+
+  if [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+    die "已设置 CLOUDFLARE_API_TOKEN 但 whoami 失败。
+请检查 Token 是否有效、是否过期，或执行 unset CLOUDFLARE_API_TOKEN 后改用 OAuth：
+  npx wrangler login"
+  fi
+
+  if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+    die "非交互模式请先登录：
+  npx wrangler login
+或设置有效的 CLOUDFLARE_API_TOKEN"
+  fi
+
+  read -r -p "是否现在运行 wrangler login（OAuth）？[Y/n]: " ans
+  [[ "${ans:-Y}" =~ ^[Yy]$ ]] || die "需要 Cloudflare 登录后才能继续"
+
+  info "启动 OAuth 登录…"
+  wrangler_cmd login || die "wrangler login 失败"
+
+  if run_wrangler_whoami; then
+    ok "OAuth 登录成功"
+    return 0
+  fi
+  die "登录后 whoami 仍失败，请重试 npx wrangler login"
+}
+
+check_workers_routes_write_permission() {
+  local text="${WRANGLER_WHOAMI:-}"
+  [[ -n "$text" ]] || return 1
+
+  if printf '%s' "$text" | grep -qiE 'workers[_ ]routes[^
+]*\(write\)|workers_routes:write'; then
+    ok "Workers Routes 写权限"
+    return 0
+  fi
+
+  if printf '%s' "$text" | grep -qiE 'workers[_ ]routes'; then
+    PAUTH_NO_WORKERS_ROUTES=1
+    warn_manual_domain_for_no_routes
+    return 1
+  fi
+
+  if printf '%s' "$text" | grep -qi 'OAuth Token'; then
+    PAUTH_NO_WORKERS_ROUTES=1
+    warn_manual_domain_for_no_routes
+    return 1
+  fi
+
+  ok "Workers Routes（whoami 未列出，假定可用）"
+  return 0
+}
 
 usage() {
   cat <<'EOF'
@@ -493,27 +595,33 @@ for line in sys.stdin.read().splitlines():
 preflight_check_cloudflare() {
   phase "预检 2/4 · Cloudflare 登录与权限"
 
-  info "Wrangler 登录状态"
-  WRANGLER_WHOAMI="$(npx wrangler whoami 2>&1)" || die "未登录：请先 npx wrangler login 或设置 CLOUDFLARE_API_TOKEN"
-  printf '%s\n' "$WRANGLER_WHOAMI"
+  if run_wrangler_whoami; then
+    ok "Wrangler 已登录"
+  else
+    ensure_wrangler_oauth_login
+  fi
+
   resolve_account_id
   ok "Account ID: ${CLOUDFLARE_ACCOUNT_ID}"
 
+  check_workers_routes_write_permission || true
+
   info "D1 读权限"
-  if ! npx wrangler d1 list --json >/dev/null 2>&1; then
+  if ! wrangler_cmd d1 list --json >/dev/null 2>&1; then
     die "无法列出 D1 数据库 — Token 需 D1 Read（或 Account D1 权限）"
   fi
   ok "D1 list"
 
   info "KV 读权限"
-  if ! npx wrangler kv namespace list >/dev/null 2>&1; then
+  if ! wrangler_cmd kv namespace list >/dev/null 2>&1; then
     die "无法列出 KV namespace — Token 需 Workers KV Storage Read"
   fi
   ok "KV list"
 
-  info "Workers / Zone API 权限"
-  ZONE_NAME="$ZONE_NAME" AUTH_HOST="$AUTH_HOST" \
-    CLOUDFLARE_ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID" python3 <<'PY' || die "Cloudflare API 权限不足"
+  if cloudflare_api_token_available; then
+    info "Workers / Zone API 权限"
+    ZONE_NAME="$ZONE_NAME" AUTH_HOST="$AUTH_HOST" \
+      CLOUDFLARE_ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID" python3 <<'PY' || die "Cloudflare API 权限不足"
 import json, os, re, sys, urllib.parse, urllib.request
 from pathlib import Path
 
@@ -570,7 +678,11 @@ if zone_name:
     if auth_host and auth_host != zone_name and not auth_host.endswith("." + zone_name):
         raise SystemExit(f"{auth_host} 不是 {zone_name} 下的主机名")
 PY
-  ok "Workers / Zone API"
+    ok "Workers / Zone API"
+  else
+    info "OAuth 模式：跳过 REST API 细检（D1/KV 已通过 whoami 验证）"
+  fi
+
   export CLOUDFLARE_ACCOUNT_ID
   ok "Cloudflare 预检通过"
 }
@@ -609,9 +721,12 @@ preflight_check_deploy_target() {
   if cloudflare_api_token_available; then
     python3 "$BIND_DOMAIN_PY" "${preflight_args[@]}"
   else
-    info "OAuth 模式：跳过 REST API 预检（Wrangler 已登录即可继续）"
-    npx wrangler whoami >/dev/null 2>&1 || die "wrangler 未登录：请先 npx wrangler login 或设置 CLOUDFLARE_API_TOKEN"
-    warn "域名将由 wrangler routes（custom_domain）在 deploy 时绑定"
+    info "OAuth 模式：跳过 REST API 预检"
+    if [[ "$PAUTH_NO_WORKERS_ROUTES" -eq 1 ]]; then
+      warn "无 Workers Routes 写权限：域名 ${AUTH_HOST} 若已被占用，请到 Cloudflare Dashboard 手动处理后再 deploy"
+    else
+      warn "域名将由 wrangler routes（custom_domain）在 deploy 时绑定"
+    fi
   fi
   ok "部署目标预检通过"
 }
@@ -794,7 +909,12 @@ verify_auth_zone() {
 bind_auth_domain() {
   [[ "$SKIP_DOMAIN_BIND" -eq 1 ]] && return 0
   if ! cloudflare_api_token_available; then
-    warn "OAuth 模式：跳过 REST 域名绑定，保留 wrangler routes 由 deploy 完成"
+    if [[ "$PAUTH_NO_WORKERS_ROUTES" -eq 1 ]]; then
+      warn "OAuth 且无 Workers Routes 写权限：跳过自动域名绑定"
+      warn "若 ${AUTH_HOST} 未指向本 Worker，请到 Cloudflare Dashboard 手动配置 Domains / DNS"
+    else
+      warn "OAuth 模式：跳过 REST 域名绑定，保留 wrangler routes 由 deploy 完成"
+    fi
     return 0
   fi
   info "绑定 ${AUTH_HOST} → Worker ${WORKER_NAME}"
@@ -808,7 +928,7 @@ bind_auth_domain() {
     return 0
   fi
   warn "首次绑定失败，先部署 Worker 再重试…"
-  npx wrangler deploy -c "$WRANGLER_CFG"
+  wrangler_cmd deploy -c "$WRANGLER_CFG"
   python3 "$BIND_DOMAIN_PY" "${bind_args[@]}" \
     || die "无法绑定 ${AUTH_HOST}，请检查 Cloudflare 权限与 DNS 记录"
 }
@@ -880,7 +1000,7 @@ run_provision() {
   export PAUTH_INSTALL_DIR="$INSTALL_DIR"
 
   find_d1_id() {
-    npx wrangler d1 list --json 2>/dev/null | python3 -c "
+    wrangler_cmd d1 list --json 2>/dev/null | python3 -c "
 import json, sys
 name = sys.argv[1]
 for row in json.load(sys.stdin):
@@ -892,12 +1012,12 @@ for row in json.load(sys.stdin):
 
   create_d1() {
     info "创建 D1: $D1_NAME ($DB_LOCATION)"
-    npx wrangler d1 create "$D1_NAME" --location "$DB_LOCATION" >/dev/null
+    wrangler_cmd d1 create "$D1_NAME" --location "$DB_LOCATION" >/dev/null
   }
 
   find_kv_id() {
     local title="$1" want_preview="${2:-0}"
-    npx wrangler kv namespace list 2>/dev/null | python3 -c "
+    wrangler_cmd kv namespace list 2>/dev/null | python3 -c "
 import json, sys
 title, want = sys.argv[1], sys.argv[2] == '1'
 raw = sys.stdin.read().strip()
@@ -918,9 +1038,9 @@ for row in data if isinstance(data, list) else []:
     local title="$1" preview="${2:-}" out id
     info "创建 KV: $title${preview:+ (preview)}"
     if [[ -n "$preview" ]]; then
-      out="$(npx wrangler kv namespace create "$title" --preview 2>&1)"
+      out="$(wrangler_cmd kv namespace create "$title" --preview 2>&1)"
     else
-      out="$(npx wrangler kv namespace create "$title" 2>&1)"
+      out="$(wrangler_cmd kv namespace create "$title" 2>&1)"
     fi
     id="$(printf '%s' "$out" | python3 -c "
 import re, sys
@@ -1046,13 +1166,16 @@ if cfg.pop('routes', None) is not None:
 " "$WRANGLER_CFG" 2>/dev/null || true
   else
     info "保留 wrangler routes（OAuth 模式或 --skip-domain-bind）"
+    if [[ "$PAUTH_NO_WORKERS_ROUTES" -eq 1 ]]; then
+      warn "无 Workers Routes 写权限：若 ${AUTH_HOST} 绑定失败，请到 Cloudflare Dashboard 手动处理域名冲突"
+    fi
   fi
 
   info "上传 SESSION_SECRET"
-  printf '%s' "$SESSION_SECRET" | npx wrangler secret put SESSION_SECRET -c "$WRANGLER_CFG"
+  printf '%s' "$SESSION_SECRET" | wrangler_cmd secret put SESSION_SECRET -c "$WRANGLER_CFG"
 
   info "D1 迁移（remote）"
-  npx wrangler d1 migrations apply DB --remote -c "$WRANGLER_CFG"
+  wrangler_cmd d1 migrations apply DB --remote -c "$WRANGLER_CFG"
 
   RUN_LOCAL_DEPLOY=0
   if [[ "$DEPLOY_MODE" == "local" ]]; then
