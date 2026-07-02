@@ -1,9 +1,10 @@
 import { Hono } from 'hono';
-import { eq, sql } from 'drizzle-orm';
+import { asc, eq, sql } from 'drizzle-orm';
 import type { RegistrationResponseJSON } from '@simplewebauthn/server';
 import type { Env } from '../types';
 import { writeAuditLog } from '../lib/audit';
 import { getDb, newId, nowIso } from '../lib/db';
+import { ROOT_USER_NAME } from '../lib/root-user';
 import { passkeys, systemConfig, users } from '../lib/schema';
 import { setUserL1Access } from '../lib/permissions';
 import {
@@ -25,13 +26,14 @@ setupRoutes.post('/begin', async (c) => {
     return c.json({ error: '系统已初始化' }, 409);
   }
 
-  const body = await c.req.json<{ name?: string }>();
-  const name = body.name?.trim();
-  if (!name) {
-    return c.json({ error: '名字不能为空' }, 400);
-  }
+  const name = ROOT_USER_NAME;
 
-  const admins = await db.select().from(users).where(eq(users.role, 'admin')).all();
+  const admins = await db
+    .select()
+    .from(users)
+    .where(eq(users.role, 'admin'))
+    .orderBy(asc(users.createdAt))
+    .all();
 
   for (const admin of admins) {
     const pkCount = await db
@@ -48,7 +50,6 @@ setupRoutes.post('/begin', async (c) => {
   let resumed = false;
 
   if (admins.length > 0) {
-    // 上次未完成 Passkey 注册（如中断或 API 测试）— 继续初始化
     userId = admins[0]!.id;
     resumed = true;
     const ts = nowIso();
@@ -80,19 +81,19 @@ setupRoutes.post('/begin', async (c) => {
     await writeAuditLog(c.env, userId, 'SETUP_BEGIN', userId, { name, resumed: true });
   }
 
-  return c.json({ ok: true, userId, resumed });
+  return c.json({ ok: true, userId, resumed, name });
 });
 
 setupRoutes.post('/passkey/options', async (c) => {
   const db = getDb(c.env);
   const config = await db.select().from(systemConfig).where(eq(systemConfig.id, 1)).get();
   if (config?.state !== 'NEEDS_SETUP') {
-    return c.json({ error: 'Setup not allowed' }, 403);
+    return c.json({ error: '系统已初始化' }, 409);
   }
 
   const resolved = await resolveSetupSession(c);
   if (!resolved) {
-    return c.json({ error: 'Setup session required' }, 401);
+    return c.json({ error: '请先开始初始化' }, 401);
   }
 
   const { options, challengeId } = await createRegistrationOptions(c.env, resolved.user);
@@ -103,12 +104,12 @@ setupRoutes.post('/passkey/verify', async (c) => {
   const db = getDb(c.env);
   const config = await db.select().from(systemConfig).where(eq(systemConfig.id, 1)).get();
   if (config?.state !== 'NEEDS_SETUP') {
-    return c.json({ error: 'Setup not allowed' }, 403);
+    return c.json({ error: '系统已初始化' }, 409);
   }
 
   const resolved = await resolveSetupSession(c);
   if (!resolved) {
-    return c.json({ error: 'Setup session required' }, 401);
+    return c.json({ error: '请先开始初始化' }, 401);
   }
 
   const body = await c.req.json<{
@@ -153,15 +154,11 @@ setupRoutes.post('/passkey/verify', async (c) => {
     await deleteSession(c.env, resolved.session.id);
 
     const { setCookie } = await createSession(c.env, resolved.user.id, 'normal');
-    appendCookies(
-      c,
-      setCookie,
-      clearCookie(c.env, 'setup_sid', '/api/setup'),
-    );
+    appendCookies(c, setCookie, clearCookie(c.env, 'setup_sid', '/api/setup'));
 
-    await writeAuditLog(c.env, resolved.user.id, 'SETUP_COMPLETE', resolved.user.id, null);
-    await writeAuditLog(c.env, resolved.user.id, 'PASSKEY_REGISTER', resolved.user.id, {
+    await writeAuditLog(c.env, resolved.user.id, 'SETUP_COMPLETE', resolved.user.id, {
       passkeyId,
+      name: resolved.user.name,
     });
 
     return c.json({ ok: true, redirect: '/admin' });

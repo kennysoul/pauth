@@ -448,7 +448,8 @@ export function AdminUsersPage() {
     load();
   }
 
-  const canManageUser = (u: AdminUser) => me && u.id !== me.id && u.role !== 'admin';
+  const canManageUser = (u: AdminUser) =>
+    me && u.id !== me.id && u.role !== 'admin' && !u.isRoot;
 
   const modalLinked =
     oauthModal &&
@@ -478,9 +479,11 @@ export function AdminUsersPage() {
             批准
           </button>
         )}
-        <button type="button" className="credential-btn" onClick={() => openRenameModal(u)}>
-          改名
-        </button>
+        {!u.isRoot && (
+          <button type="button" className="credential-btn" onClick={() => openRenameModal(u)}>
+            改名
+          </button>
+        )}
         <button
           type="button"
           className="credential-btn icon"
@@ -590,7 +593,10 @@ export function AdminUsersPage() {
                 ) : (
                   users.map((u) => (
                     <tr key={u.id}>
-                      <td>{u.name}</td>
+                      <td>
+                        {u.name}
+                        {u.isRoot && <span className="role-chip admin" style={{ marginLeft: '0.5rem' }}>root</span>}
+                      </td>
                       <td>{renderRoleCell(u)}</td>
                       <td>
                         <span className={`status-chip ${statusChipClass(u)}`}>{statusLabel(u)}</span>

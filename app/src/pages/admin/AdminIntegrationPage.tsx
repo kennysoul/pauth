@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, type GoogleIntegration, type MicrosoftIntegration, type WebAuthIntegration } from '../../api';
+import { useToast } from '../../components/useToast';
 
 type GoogleForm = {
   clientId: string;
@@ -98,10 +99,36 @@ function toMicrosoftForm(m: MicrosoftIntegration): MicrosoftForm {
   };
 }
 
+function IntegrationCardHead({
+  title,
+  desc,
+  status,
+}: {
+  title: string;
+  desc: string;
+  status?: { on: boolean; onLabel?: string; offLabel?: string };
+}) {
+  return (
+    <div className="settings-inline-head integration-card-head">
+      <div>
+        <div className="integration-title-row">
+          <h3>{title}</h3>
+          {status && (
+            <span className={`status-chip ${status.on ? 'active' : 'disabled'}`}>
+              {status.on ? (status.onLabel ?? '已启用') : (status.offLabel ?? '未启用')}
+            </span>
+          )}
+        </div>
+        <p className="config-card-desc">{desc}</p>
+      </div>
+    </div>
+  );
+}
+
 export function AdminIntegrationPage() {
+  const { showToast, toastEl } = useToast();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [webauth, setWebauth] = useState<WebAuthIntegration | null>(null);
   const [google, setGoogle] = useState<GoogleForm>({
@@ -151,13 +178,12 @@ export function AdminIntegrationPage() {
     if (!baseline) return;
     setGoogle({ ...baseline.google, clientSecret: '' });
     setMicrosoft({ ...baseline.microsoft, clientSecret: '' });
-    setMessage(null);
     setError(null);
+    showToast('已恢复为上次保存的配置');
   }
 
   async function saveAll() {
     setSaving(true);
-    setMessage(null);
     setError(null);
     try {
       const [gRes, mRes] = await Promise.all([
@@ -188,7 +214,7 @@ export function AdminIntegrationPage() {
         google: gForm,
         microsoft: mForm,
       }));
-      setMessage('集成配置已保存');
+      showToast('集成配置已保存');
     } catch (e) {
       setError(e instanceof Error ? e.message : '保存失败');
     } finally {
@@ -196,134 +222,150 @@ export function AdminIntegrationPage() {
     }
   }
 
-  if (loading) return <p className="sub">加载中…</p>;
-
-  const googleHint = google.enabled
-    ? `Google 当前状态：已启用，${google.clientSecretSet ? '已配置 Secret（默认掩码显示）' : '未配置 Secret'}`
-    : 'Google 当前状态：未启用';
-  const microsoftHint = microsoft.enabled
-    ? `Microsoft 当前状态：已启用，${microsoft.clientSecretSet ? '已配置 Secret（默认掩码显示）' : '未配置 Secret'}`
-    : 'Microsoft 当前状态：未启用';
-
   return (
     <>
-      <div className="page-header">
-        <div>
-          <h1>集成与安全</h1>
-          <p className="sub integration-subtitle">配置 WEBAUTH、Google、Microsoft 登录。</p>
+      <div className="main-head">
+        <div className="head-text">
+          <h1 className="head-title">集成与安全</h1>
+          <p className="head-sub">配置 Passkey、Google、Microsoft 登录参数。</p>
         </div>
         <div className="page-header-actions">
-          <button type="button" className="secondary" disabled={saving || !baseline} onClick={resetForms}>
+          <button
+            type="button"
+            className="btn"
+            disabled={saving || loading || !baseline}
+            onClick={resetForms}
+          >
             重置
           </button>
-          <button type="button" disabled={saving} onClick={saveAll}>
+          <button type="button" className="btn primary" disabled={saving || loading} onClick={saveAll}>
             {saving ? '保存中…' : '保存'}
           </button>
         </div>
       </div>
 
-      {message && <p className="success">{message}</p>}
-      {error && <p className="error">{error}</p>}
+      <div className="admin-main-body">
+        {loading ? (
+          <p className="sub">加载中…</p>
+        ) : (
+          <>
+            {error && <p className="error span-12">{error}</p>}
 
-      <div className="integration-stack">
-        <article className="card integration-card">
-          <h3>WEBAUTH</h3>
-          <p className="sub">
-            用于 Passkey 登录；此处仅展示当前运行配置（来自 wrangler/env），不在页面内修改或应用。
-          </p>
-          <div className="field-grid two">
-            <div className="field">
-              <label htmlFor="webauth-rp-id">RP_ID</label>
-              <input id="webauth-rp-id" readOnly value={webauth?.rpId ?? ''} />
-            </div>
-            <div className="field">
-              <label htmlFor="webauth-origin">ORIGIN</label>
-              <input id="webauth-origin" readOnly value={webauth?.origin ?? ''} />
-            </div>
-          </div>
-          <p className="hint">
-            当前运行值：RP_NAME={webauth?.rpName ?? '—'}；来源 {webauth?.source ?? 'wrangler'} 运行配置。
-            {webauth?.cookieDomain ? ` Cookie Domain=${webauth.cookieDomain}。` : ''}
-          </p>
-        </article>
+            <article className="card span-12 integration-card">
+              <IntegrationCardHead
+                title="WEBAUTH"
+                desc="Passkey 运行参数，来自 wrangler/env，仅展示不可在此修改。"
+              />
+              <div className="integration-form-grid">
+                <div className="config-field">
+                  <label htmlFor="webauth-rp-id">RP_ID</label>
+                  <input id="webauth-rp-id" readOnly value={webauth?.rpId ?? ''} />
+                </div>
+                <div className="config-field">
+                  <label htmlFor="webauth-origin">ORIGIN</label>
+                  <input id="webauth-origin" readOnly value={webauth?.origin ?? ''} />
+                </div>
+              </div>
+              <p className="integration-meta">
+                RP_NAME={webauth?.rpName ?? '—'} · 来源 {webauth?.source ?? 'wrangler'}
+                {webauth?.cookieDomain ? ` · Cookie Domain=${webauth.cookieDomain}` : ''}
+              </p>
+            </article>
 
-        <article className="card integration-card">
-          <h3>Google OAuth</h3>
-          <p className="sub">Client ID 与 Client Secret 为必填；Redirect URI 为可选。</p>
-          <div className="field-grid">
-            <div className="field">
-              <label htmlFor="google-client-id">Client ID</label>
-              <input
-                id="google-client-id"
-                value={google.clientId}
-                onChange={(e) => setGoogle({ ...google, clientId: e.target.value })}
+            <article className="card span-12 integration-card">
+              <IntegrationCardHead
+                title="Google OAuth"
+                desc="Client ID 与 Client Secret 为必填；Redirect URI 可选。"
+                status={{ on: google.enabled }}
               />
-            </div>
-            <div className="field">
-              <label htmlFor="google-client-secret">Client Secret</label>
-              <SecretField
-                id="google-client-secret"
-                value={google.clientSecret}
-                onChange={(v) => setGoogle({ ...google, clientSecret: v })}
-                secretSet={google.clientSecretSet}
-              />
-            </div>
-            <div className="field">
-              <label htmlFor="google-redirect">Redirect URI</label>
-              <input
-                id="google-redirect"
-                value={google.redirectUri}
-                onChange={(e) => setGoogle({ ...google, redirectUri: e.target.value })}
-                placeholder="留空则按当前访问域名自动推导"
-              />
-            </div>
-          </div>
-          <p className="hint">{googleHint}</p>
-        </article>
+              <div className="integration-form-grid">
+                <div className="config-field">
+                  <label htmlFor="google-client-id">Client ID</label>
+                  <input
+                    id="google-client-id"
+                    value={google.clientId}
+                    onChange={(e) => setGoogle({ ...google, clientId: e.target.value })}
+                  />
+                </div>
+                <div className="config-field">
+                  <label htmlFor="google-client-secret">Client Secret</label>
+                  <SecretField
+                    id="google-client-secret"
+                    value={google.clientSecret}
+                    onChange={(v) => setGoogle({ ...google, clientSecret: v })}
+                    secretSet={google.clientSecretSet}
+                  />
+                </div>
+                <div className="config-field integration-field-full">
+                  <label htmlFor="google-redirect">Redirect URI</label>
+                  <input
+                    id="google-redirect"
+                    value={google.redirectUri}
+                    onChange={(e) => setGoogle({ ...google, redirectUri: e.target.value })}
+                    placeholder="留空则按当前访问域名自动推导"
+                  />
+                </div>
+              </div>
+              {google.enabled && (
+                <p className="integration-meta">
+                  Secret {google.clientSecretSet ? '已配置（默认掩码显示）' : '未配置'}
+                </p>
+              )}
+            </article>
 
-        <article className="card integration-card">
-          <h3>Microsoft</h3>
-          <p className="sub">仅通过本页面配置 Microsoft 登录（不依赖 wrangler/env）。</p>
-          <div className="field-grid two">
-            <div className="field">
-              <label htmlFor="ms-tenant">Tenant ID</label>
-              <input
-                id="ms-tenant"
-                value={microsoft.tenantId}
-                onChange={(e) => setMicrosoft({ ...microsoft, tenantId: e.target.value })}
-                placeholder="common"
+            <article className="card span-12 integration-card">
+              <IntegrationCardHead
+                title="Microsoft"
+                desc="在本页面配置 Microsoft 登录，不依赖 wrangler/env。"
+                status={{ on: microsoft.enabled }}
               />
-            </div>
-            <div className="field">
-              <label htmlFor="ms-client-id">Client ID</label>
-              <input
-                id="ms-client-id"
-                value={microsoft.clientId}
-                onChange={(e) => setMicrosoft({ ...microsoft, clientId: e.target.value })}
-              />
-            </div>
-            <div className="field">
-              <label htmlFor="ms-client-secret">Client Secret</label>
-              <SecretField
-                id="ms-client-secret"
-                value={microsoft.clientSecret}
-                onChange={(v) => setMicrosoft({ ...microsoft, clientSecret: v })}
-                secretSet={microsoft.clientSecretSet}
-              />
-            </div>
-            <div className="field">
-              <label htmlFor="ms-redirect">Redirect URI（可选）</label>
-              <input
-                id="ms-redirect"
-                value={microsoft.redirectUri}
-                onChange={(e) => setMicrosoft({ ...microsoft, redirectUri: e.target.value })}
-                placeholder="留空则按当前访问域名自动推导"
-              />
-            </div>
-          </div>
-          <p className="hint">{microsoftHint}</p>
-        </article>
+              <div className="integration-form-grid">
+                <div className="config-field">
+                  <label htmlFor="ms-tenant">Tenant ID</label>
+                  <input
+                    id="ms-tenant"
+                    value={microsoft.tenantId}
+                    onChange={(e) => setMicrosoft({ ...microsoft, tenantId: e.target.value })}
+                    placeholder="common"
+                  />
+                </div>
+                <div className="config-field">
+                  <label htmlFor="ms-client-id">Client ID</label>
+                  <input
+                    id="ms-client-id"
+                    value={microsoft.clientId}
+                    onChange={(e) => setMicrosoft({ ...microsoft, clientId: e.target.value })}
+                  />
+                </div>
+                <div className="config-field">
+                  <label htmlFor="ms-client-secret">Client Secret</label>
+                  <SecretField
+                    id="ms-client-secret"
+                    value={microsoft.clientSecret}
+                    onChange={(v) => setMicrosoft({ ...microsoft, clientSecret: v })}
+                    secretSet={microsoft.clientSecretSet}
+                  />
+                </div>
+                <div className="config-field">
+                  <label htmlFor="ms-redirect">Redirect URI</label>
+                  <input
+                    id="ms-redirect"
+                    value={microsoft.redirectUri}
+                    onChange={(e) => setMicrosoft({ ...microsoft, redirectUri: e.target.value })}
+                    placeholder="留空则按当前访问域名自动推导"
+                  />
+                </div>
+              </div>
+              {microsoft.enabled && (
+                <p className="integration-meta">
+                  Secret {microsoft.clientSecretSet ? '已配置（默认掩码显示）' : '未配置'}
+                </p>
+              )}
+            </article>
+          </>
+        )}
       </div>
+      {toastEl}
     </>
   );
 }

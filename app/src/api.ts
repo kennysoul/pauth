@@ -58,6 +58,7 @@ export type AdminUser = {
   microsoftCanUnlink: boolean;
   microsoftAllowedEmail: string;
   hasPasskey: boolean;
+  isRoot?: boolean;
 };
 
 export type PasskeyCredential = {
@@ -137,4 +138,23 @@ export type InviteResult = {
 export type InviteInfo = {
   name: string;
   role: string;
+};
+
+export type BackupPreview = {
+  users: number;
+  passkeys: number;
+  clients: number;
+  oauthIdentities: number;
+  settings: number;
+  invites: number;
+  l1Grants: number;
+  exportedAt: string;
+  registrationEnabled: boolean;
+};
+
+export type BackupExportResult = {
+  ok: boolean;
+  filename: string;
+  bundle: string;
+  preview: BackupPreview;
 };

@@ -14,8 +14,10 @@ import {
 } from '../lib/passkey-delegate';
 import { newClientSecret, sha256Hex } from '../lib/crypto';
 import { registerAdminOAuthRoutes } from './admin-oauth';
+import { registerAdminBackupRoutes } from './admin-backup';
 import { buildOAuthUserFields } from './oauth';
 import { getGoogleOAuthConfig, getMicrosoftOAuthConfig } from '../lib/oauth-config';
+import { getRootUserId, isRootUserId, ROOT_USER_NAME } from '../lib/root-user';
 
 export const adminRoutes = new Hono<{ Bindings: Env; Variables: AuthContext }>();
 
@@ -79,6 +81,7 @@ adminRoutes.get('/users', async (c) => {
 
   const googleEnabled = (await getGoogleOAuthConfig(c.env)).enabled;
   const microsoftEnabled = (await getMicrosoftOAuthConfig(c.env)).enabled;
+  const rootUserId = await getRootUserId(c.env);
 
   const result = [];
   for (const u of userRows) {
@@ -100,6 +103,7 @@ adminRoutes.get('/users', async (c) => {
       passkeyCount: countMap.get(u.id) ?? 0,
       hasPendingInvite: inviteMap.has(u.id) && u.status === 'pending',
       l1Enabled: permissions.l1Enabled,
+      isRoot: isRootUserId(u.id, rootUserId),
       ...oauthFields,
     });
   }
@@ -122,6 +126,16 @@ adminRoutes.patch('/users/:id', async (c) => {
     return c.json({ error: 'User not found' }, 404);
   }
 
+  const rootUserId = await getRootUserId(c.env);
+  if (isRootUserId(targetId, rootUserId)) {
+    if (body.name !== undefined && body.name.trim() !== ROOT_USER_NAME) {
+      return c.json({ error: 'root 管理员名称不可修改' }, 400);
+    }
+    if (body.status === 'disabled') {
+      return c.json({ error: '不可禁用 root 管理员' }, 400);
+    }
+  }
+
   const updates: { status?: 'active' | 'disabled'; name?: string; updatedAt: string } = {
     updatedAt: nowIso(),
   };
@@ -130,6 +144,9 @@ adminRoutes.patch('/users/:id', async (c) => {
     const name = body.name.trim();
     if (!name) {
       return c.json({ error: 'Name cannot be empty' }, 400);
+    }
+    if (name === ROOT_USER_NAME && !isRootUserId(targetId, rootUserId)) {
+      return c.json({ error: '名称 root 保留给首个管理员' }, 400);
     }
     updates.name = name;
   }
@@ -193,6 +210,10 @@ adminRoutes.delete('/users/:id', async (c) => {
   if (targetId === actor.id) {
     return c.json({ error: 'Cannot delete yourself' }, 400);
   }
+  const rootUserId = await getRootUserId(c.env);
+  if (isRootUserId(targetId, rootUserId)) {
+    return c.json({ error: '不可删除 root 管理员' }, 400);
+  }
   if (target.role === 'admin' && target.status === 'active') {
     const admins = await db
       .select({ count: sql<number>`count(*)` })
@@ -238,6 +259,9 @@ adminRoutes.post('/users', async (c) => {
   const name = body.name?.trim();
   if (!name) {
     return c.json({ error: 'name is required' }, 400);
+  }
+  if (name === ROOT_USER_NAME) {
+    return c.json({ error: '名称 root 保留给首个管理员' }, 400);
   }
 
   const role = body.role === 'admin' ? 'admin' : 'user';
@@ -573,3 +597,4 @@ adminRoutes.post('/system/reset', async (c) => {
 });
 
 registerAdminOAuthRoutes(adminRoutes);
+registerAdminBackupRoutes(adminRoutes);
