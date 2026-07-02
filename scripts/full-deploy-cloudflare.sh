@@ -65,11 +65,11 @@ NC='\033[0m'
 
 # ── 输出 ──────────────────────────────────────────────────────────────────────
 
-info()  { printf '%b\n' "${GREEN}→${NC} $*"; }
-warn()  { printf '%b\n' "${YELLOW}!${NC} $*"; }
+info()  { printf '%b\n' "${GREEN}→${NC} $*" >&2; }
+warn()  { printf '%b\n' "${YELLOW}!${NC} $*" >&2; }
 die()   { printf '%b\n' "${RED}✗${NC} $*" >&2; exit 1; }
-ok()    { printf '%b\n' "${GREEN}✓${NC} $*"; }
-phase() { printf '\n%b\n' "${CYAN}── $* ──${NC}"; }
+ok()    { printf '%b\n' "${GREEN}✓${NC} $*" >&2; }
+phase() { printf '\n%b\n' "${CYAN}── $* ──${NC}" >&2; }
 
 # npx --yes 避免首次运行时的 “Ok to proceed?” 交互卡住
 wrangler_cmd() {
@@ -170,6 +170,20 @@ check_workers_routes_write_permission() {
 
   ok "Workers Routes（whoami 未列出，假定可用）"
   return 0
+}
+
+sanitize_cloudflare_id() {
+  local raw="$1"
+  printf '%s' "$raw" | grep -oE '[0-9a-f]{32}' | tail -1
+}
+
+validate_resource_ids() {
+  D1_ID="$(sanitize_cloudflare_id "$D1_ID")"
+  KV_ID="$(sanitize_cloudflare_id "$KV_ID")"
+  KV_PREVIEW_ID="$(sanitize_cloudflare_id "$KV_PREVIEW_ID")"
+  [[ -n "$D1_ID" ]] || die "D1 id 无效（可能因日志混入配置，请重试）"
+  [[ -n "$KV_ID" ]] || die "KV id 无效（可能因日志混入配置，请重试）"
+  [[ -n "$KV_PREVIEW_ID" ]] || die "KV preview id 无效（可能因日志混入配置，请重试）"
 }
 
 usage() {
@@ -1066,6 +1080,8 @@ print(m.group(1) if m else '')
   KV_PREVIEW_ID="${KV_PREVIEW_ID:-$(find_kv_id "$KV_TITLE" 1 || true)}"
   [[ -z "$KV_PREVIEW_ID" ]] && KV_PREVIEW_ID="$(create_kv "$KV_TITLE" --preview)"
   info "KV: $KV_TITLE → $KV_ID"
+
+  validate_resource_ids
 
   phase "Wrangler 配置"
 

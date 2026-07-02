@@ -45,8 +45,8 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-info() { printf '%b\n' "${GREEN}→${NC} $*"; }
-warn() { printf '%b\n' "${YELLOW}!${NC} $*"; }
+info() { printf '%b\n' "${GREEN}→${NC} $*" >&2; }
+warn() { printf '%b\n' "${YELLOW}!${NC} $*" >&2; }
 die() { printf '%b\n' "${RED}✗${NC} $*" >&2; exit 1; }
 
 usage() {
@@ -825,6 +825,20 @@ print(m.group(1) if m else '')
   printf '%s' "$id"
 }
 
+sanitize_cloudflare_id() {
+  local raw="$1"
+  printf '%s' "$raw" | grep -oE '[0-9a-f]{32}' | tail -1
+}
+
+validate_resource_ids() {
+  D1_ID="$(sanitize_cloudflare_id "$D1_ID")"
+  KV_ID="$(sanitize_cloudflare_id "$KV_ID")"
+  KV_PREVIEW_ID="$(sanitize_cloudflare_id "$KV_PREVIEW_ID")"
+  [[ -n "$D1_ID" ]] || die "Invalid D1 id (log text may have been captured — retry deploy)"
+  [[ -n "$KV_ID" ]] || die "Invalid KV id (log text may have been captured — retry deploy)"
+  [[ -n "$KV_PREVIEW_ID" ]] || die "Invalid KV preview id (log text may have been captured — retry deploy)"
+}
+
 # Reuse IDs from existing local config when user chose keep
 D1_ID="$(find_d1_id || true)"
 if [[ -z "$D1_ID" ]]; then create_d1; D1_ID="$(find_d1_id)"; fi
@@ -836,6 +850,8 @@ KV_ID="${KV_ID:-$(find_kv_id "$KV_TITLE" || true)}"
 KV_PREVIEW_ID="${KV_PREVIEW_ID:-$(find_kv_id "$KV_TITLE" 1 || true)}"
 [[ -z "$KV_PREVIEW_ID" ]] && KV_PREVIEW_ID="$(create_kv "$KV_TITLE" --preview)"
 info "KV: $KV_TITLE → $KV_ID"
+
+validate_resource_ids
 
 # ── Wrangler config (interactive policy per file) ───────────────────────────
 
