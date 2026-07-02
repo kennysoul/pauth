@@ -231,6 +231,31 @@ write_wrangler_config() {
   esac
 }
 
+ensure_wrangler_custom_domain_route() {
+  local cfg="$1"
+  [[ -f "$cfg" && -n "$AUTH_HOST" ]] || return 0
+  local result
+  result="$(python3 "$CONFIG_PY" \
+    --target "$cfg" \
+    --auth-host "$AUTH_HOST" \
+    --ensure-custom-domain-route \
+    --worker-name "$WORKER_NAME" \
+    --zone-name "$ZONE_NAME" \
+    --rp-id "${RP_ID:-$ZONE_NAME}" \
+    --rp-name "$RP_NAME" \
+    --origin "$ORIGIN" \
+    --cookie-domain "$COOKIE_DOMAIN" \
+    --d1-name "$D1_NAME" \
+    --d1-id "${D1_ID:-00000000000000000000000000000000}" \
+    --kv-id "${KV_ID:-00000000000000000000000000000000}" \
+    --kv-preview-id "${KV_PREVIEW_ID:-00000000000000000000000000000000}" \
+    2>/dev/null || true)"
+  case "$result" in
+    ENSURED) info "已写入 custom domain route: ${AUTH_HOST}" ;;
+    UNCHANGED) info "custom domain route 已存在: ${AUTH_HOST}" ;;
+  esac
+}
+
 load_vars_from_wrangler() {
   local file="$1"
   [[ -f "$file" ]] || return 0
@@ -358,9 +383,9 @@ pauth_apply_resolve_json() {
   fi
 
   PAUTH_DEPLOY_MODE="$(printf '%s' "$json" | python3 -c "import json,sys; print(json.load(sys.stdin)['mode'])")"
-  D1_ID="$(sanitize_cloudflare_id "$(printf '%s' "$json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('d1_id',''))")")"
-  KV_ID="$(sanitize_cloudflare_id "$(printf '%s' "$json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('kv_id',''))")")"
-  KV_PREVIEW_ID="$(sanitize_cloudflare_id "$(printf '%s' "$json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('kv_preview_id',''))")")"
+  D1_ID="$(sanitize_d1_id "$(printf '%s' "$json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('d1_id',''))")")"
+  KV_ID="$(sanitize_kv_id "$(printf '%s' "$json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('kv_id',''))")")"
+  KV_PREVIEW_ID="$(sanitize_kv_id "$(printf '%s' "$json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('kv_preview_id',''))")")"
 
   if [[ -z "$CONFIG_POLICY" ]]; then
     CONFIG_POLICY="merge-bindings"
@@ -506,8 +531,10 @@ verify_auth_zone() {
 
 bind_auth_domain() {
   [[ "$SKIP_DOMAIN_BIND" -eq 1 ]] && return 0
+  ensure_wrangler_custom_domain_route "$WRANGLER_CFG"
   if ! cloudflare_api_token_available; then
-    warn "OAuth 模式：跳过 REST 域名绑定，保留 wrangler routes 由 deploy 完成"
+    info "OAuth 模式：由 wrangler custom_domain routes 绑定 ${AUTH_HOST}"
+    npx wrangler deploy -c "$WRANGLER_CFG"
     return 0
   fi
   info "绑定 ${AUTH_HOST} → Worker ${WORKER_NAME}（覆盖已有 Worker / DNS 绑定）"
@@ -520,9 +547,8 @@ bind_auth_domain() {
   if python3 "$BIND_DOMAIN_PY" "${bind_args[@]}"; then
     return 0
   fi
-  warn "首次绑定失败，先部署 Worker 再重试…"
-  npx wrangler deploy -c "$WRANGLER_CFG"
-  python3 "$BIND_DOMAIN_PY" "${bind_args[@]}" \
+  warn "REST 域名绑定失败，改用 wrangler custom_domain routes…"
+  npx wrangler deploy -c "$WRANGLER_CFG" \
     || die "无法绑定 ${AUTH_HOST}，请检查 Cloudflare 权限（Workers + DNS + Zone）"
 }
 
@@ -825,45 +851,52 @@ print(m.group(1) if m else '')
   printf '%s' "$id"
 }
 
-sanitize_cloudflare_id() {
+sanitize_kv_id() {
   local raw="$1"
-  printf '%s' "$raw" | grep -oE '[0-9a-f]{32}' | tail -1
+  local compact
+  compact="$(printf '%s' "$raw" | tr -d '-')"
+  printf '%s' "$compact" | grep -oE '[0-9a-f]{32}' | tail -1 || true
+}
+
+sanitize_d1_id() {
+  local raw="$1"
+  printf '%s' "$raw" | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | tail -1 || true
 }
 
 validate_resource_ids() {
-  D1_ID="$(sanitize_cloudflare_id "$D1_ID")"
-  KV_ID="$(sanitize_cloudflare_id "$KV_ID")"
-  KV_PREVIEW_ID="$(sanitize_cloudflare_id "$KV_PREVIEW_ID")"
+  D1_ID="$(sanitize_d1_id "$D1_ID")"
+  KV_ID="$(sanitize_kv_id "$KV_ID")"
+  KV_PREVIEW_ID="$(sanitize_kv_id "$KV_PREVIEW_ID")"
   [[ -n "$D1_ID" ]] || die "Invalid D1 id (log text may have been captured — retry deploy)"
   [[ -n "$KV_ID" ]] || die "Invalid KV id (log text may have been captured — retry deploy)"
   [[ -n "$KV_PREVIEW_ID" ]] || die "Invalid KV preview id (log text may have been captured — retry deploy)"
 }
 
-D1_ID="$(sanitize_cloudflare_id "$D1_ID")"
+D1_ID="$(sanitize_d1_id "$D1_ID")"
 if [[ -z "$D1_ID" ]]; then
-  D1_ID="$(sanitize_cloudflare_id "$(find_d1_id || true)")"
+  D1_ID="$(sanitize_d1_id "$(find_d1_id || true)")"
 fi
 if [[ -z "$D1_ID" ]]; then
   create_d1
-  D1_ID="$(sanitize_cloudflare_id "$(find_d1_id)")"
+  D1_ID="$(sanitize_d1_id "$(find_d1_id)")"
 fi
 [[ -n "$D1_ID" ]] || die "无法获取 D1 id"
 
-KV_ID="$(sanitize_cloudflare_id "$KV_ID")"
+KV_ID="$(sanitize_kv_id "$KV_ID")"
 if [[ -z "$KV_ID" ]]; then
-  KV_ID="$(sanitize_cloudflare_id "$(find_kv_id "$KV_TITLE" || true)")"
+  KV_ID="$(sanitize_kv_id "$(find_kv_id "$KV_TITLE" || true)")"
 fi
 if [[ -z "$KV_ID" ]]; then
-  KV_ID="$(sanitize_cloudflare_id "$(create_kv "$KV_TITLE")")"
+  KV_ID="$(sanitize_kv_id "$(create_kv "$KV_TITLE")")"
 fi
 [[ -n "$KV_ID" ]] || die "无法获取 KV id"
 
-KV_PREVIEW_ID="$(sanitize_cloudflare_id "$KV_PREVIEW_ID")"
+KV_PREVIEW_ID="$(sanitize_kv_id "$KV_PREVIEW_ID")"
 if [[ -z "$KV_PREVIEW_ID" ]]; then
-  KV_PREVIEW_ID="$(sanitize_cloudflare_id "$(find_kv_id "$KV_TITLE" 1 || true)")"
+  KV_PREVIEW_ID="$(sanitize_kv_id "$(find_kv_id "$KV_TITLE" 1 || true)")"
 fi
 if [[ -z "$KV_PREVIEW_ID" ]]; then
-  KV_PREVIEW_ID="$(sanitize_cloudflare_id "$(create_kv "$KV_TITLE" --preview)")"
+  KV_PREVIEW_ID="$(sanitize_kv_id "$(create_kv "$KV_TITLE" --preview)")"
 fi
 [[ -n "$KV_PREVIEW_ID" ]] || die "无法获取 KV preview id"
 
@@ -946,11 +979,7 @@ npm run build
 WRANGLER_CFG="$WRANGLER_LOCAL"
 [[ -f "$WRANGLER_CFG" ]] || die "缺少 $WRANGLER_CFG"
 
-if cloudflare_api_token_available && [[ "$SKIP_DOMAIN_BIND" -eq 0 ]]; then
-  strip_wrangler_routes "$WRANGLER_CFG"
-else
-  info "保留 wrangler routes（OAuth 模式或 --skip-domain-bind）"
-fi
+ensure_wrangler_custom_domain_route "$WRANGLER_CFG"
 
 info "上传 SESSION_SECRET 到 Worker"
 printf '%s' "$SESSION_SECRET" | npx wrangler secret put SESSION_SECRET -c "$WRANGLER_CFG"

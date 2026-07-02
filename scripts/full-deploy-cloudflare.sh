@@ -171,15 +171,22 @@ check_workers_routes_write_permission() {
   return 0
 }
 
-sanitize_cloudflare_id() {
+sanitize_kv_id() {
   local raw="$1"
-  printf '%s' "$raw" | grep -oE '[0-9a-f]{32}' | tail -1
+  local compact
+  compact="$(printf '%s' "$raw" | tr -d '-')"
+  printf '%s' "$compact" | grep -oE '[0-9a-f]{32}' | tail -1 || true
+}
+
+sanitize_d1_id() {
+  local raw="$1"
+  printf '%s' "$raw" | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | tail -1 || true
 }
 
 validate_resource_ids() {
-  D1_ID="$(sanitize_cloudflare_id "$D1_ID")"
-  KV_ID="$(sanitize_cloudflare_id "$KV_ID")"
-  KV_PREVIEW_ID="$(sanitize_cloudflare_id "$KV_PREVIEW_ID")"
+  D1_ID="$(sanitize_d1_id "$D1_ID")"
+  KV_ID="$(sanitize_kv_id "$KV_ID")"
+  KV_PREVIEW_ID="$(sanitize_kv_id "$KV_PREVIEW_ID")"
   [[ -n "$D1_ID" ]] || die "D1 id 无效（可能因日志混入配置，请重试）"
   [[ -n "$KV_ID" ]] || die "KV id 无效（可能因日志混入配置，请重试）"
   [[ -n "$KV_PREVIEW_ID" ]] || die "KV preview id 无效（可能因日志混入配置，请重试）"
@@ -516,9 +523,9 @@ apply_resolve_json() {
     KV_TITLE="$(printf '%s' "$json" | python3 -c "import json,sys; print(json.load(sys.stdin)['kv_title'])")"
   fi
   PAUTH_DEPLOY_MODE="$(printf '%s' "$json" | python3 -c "import json,sys; print(json.load(sys.stdin)['mode'])")"
-  D1_ID="$(sanitize_cloudflare_id "$(printf '%s' "$json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('d1_id',''))")")"
-  KV_ID="$(sanitize_cloudflare_id "$(printf '%s' "$json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('kv_id',''))")")"
-  KV_PREVIEW_ID="$(sanitize_cloudflare_id "$(printf '%s' "$json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('kv_preview_id',''))")")"
+  D1_ID="$(sanitize_d1_id "$(printf '%s' "$json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('d1_id',''))")")"
+  KV_ID="$(sanitize_kv_id "$(printf '%s' "$json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('kv_id',''))")")"
+  KV_PREVIEW_ID="$(sanitize_kv_id "$(printf '%s' "$json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('kv_preview_id',''))")")"
   CONFIG_POLICY="${CONFIG_POLICY:-merge-bindings}"
   if [[ "$PAUTH_DEPLOY_MODE" == "upgrade" ]]; then
     info "升级已有部署 · Worker=${WORKER_NAME}"
@@ -856,6 +863,31 @@ write_wrangler_config() {
   esac
 }
 
+ensure_wrangler_custom_domain_route() {
+  local cfg="$1"
+  [[ -f "$cfg" && -n "$AUTH_HOST" ]] || return 0
+  local result
+  result="$(python3 "$CONFIG_PY" \
+    --target "$cfg" \
+    --auth-host "$AUTH_HOST" \
+    --ensure-custom-domain-route \
+    --worker-name "$WORKER_NAME" \
+    --zone-name "$ZONE_NAME" \
+    --rp-id "${RP_ID:-$ZONE_NAME}" \
+    --rp-name "$RP_NAME" \
+    --origin "$ORIGIN" \
+    --cookie-domain "$COOKIE_DOMAIN" \
+    --d1-name "$D1_NAME" \
+    --d1-id "${D1_ID:-00000000000000000000000000000000}" \
+    --kv-id "${KV_ID:-00000000000000000000000000000000}" \
+    --kv-preview-id "${KV_PREVIEW_ID:-00000000000000000000000000000000}" \
+    2>/dev/null || true)"
+  case "$result" in
+    ENSURED) info "已写入 custom domain route: ${AUTH_HOST}" ;;
+    UNCHANGED) info "custom domain route 已存在: ${AUTH_HOST}" ;;
+  esac
+}
+
 load_vars_from_wrangler() {
   local file="$1"
   [[ -f "$file" ]] || return 0
@@ -921,13 +953,10 @@ verify_auth_zone() {
 
 bind_auth_domain() {
   [[ "$SKIP_DOMAIN_BIND" -eq 1 ]] && return 0
+  ensure_wrangler_custom_domain_route "$WRANGLER_CFG"
   if ! cloudflare_api_token_available; then
-    if [[ "$PAUTH_NO_WORKERS_ROUTES" -eq 1 ]]; then
-      warn "OAuth 且无 Workers Routes 写权限：跳过自动域名绑定"
-      warn "若 ${AUTH_HOST} 未指向本 Worker，请到 Cloudflare Dashboard 手动配置 Domains / DNS"
-    else
-      warn "OAuth 模式：跳过 REST 域名绑定，保留 wrangler routes 由 deploy 完成"
-    fi
+    info "OAuth 模式：由 wrangler custom_domain routes 绑定 ${AUTH_HOST}"
+    wrangler_cmd deploy -c "$WRANGLER_CFG"
     return 0
   fi
   info "绑定 ${AUTH_HOST} → Worker ${WORKER_NAME}"
@@ -940,9 +969,8 @@ bind_auth_domain() {
   if python3 "$BIND_DOMAIN_PY" "${bind_args[@]}"; then
     return 0
   fi
-  warn "首次绑定失败，先部署 Worker 再重试…"
-  wrangler_cmd deploy -c "$WRANGLER_CFG"
-  python3 "$BIND_DOMAIN_PY" "${bind_args[@]}" \
+  warn "REST 域名绑定失败，改用 wrangler custom_domain routes…"
+  wrangler_cmd deploy -c "$WRANGLER_CFG" \
     || die "无法绑定 ${AUTH_HOST}，请检查 Cloudflare 权限与 DNS 记录"
 }
 
@@ -1069,31 +1097,31 @@ print(m.group(1) if m else '')
 
   phase "Cloudflare 资源 · D1 / KV"
 
-  D1_ID="$(sanitize_cloudflare_id "$D1_ID")"
+  D1_ID="$(sanitize_d1_id "$D1_ID")"
   if [[ -z "$D1_ID" ]]; then
-    D1_ID="$(sanitize_cloudflare_id "$(find_d1_id || true)")"
+    D1_ID="$(sanitize_d1_id "$(find_d1_id || true)")"
   fi
   if [[ -z "$D1_ID" ]]; then
     create_d1
-    D1_ID="$(sanitize_cloudflare_id "$(find_d1_id)")"
+    D1_ID="$(sanitize_d1_id "$(find_d1_id)")"
   fi
   [[ -n "$D1_ID" ]] || die "无法获取 D1 id"
 
-  KV_ID="$(sanitize_cloudflare_id "$KV_ID")"
+  KV_ID="$(sanitize_kv_id "$KV_ID")"
   if [[ -z "$KV_ID" ]]; then
-    KV_ID="$(sanitize_cloudflare_id "$(find_kv_id "$KV_TITLE" || true)")"
+    KV_ID="$(sanitize_kv_id "$(find_kv_id "$KV_TITLE" || true)")"
   fi
   if [[ -z "$KV_ID" ]]; then
-    KV_ID="$(sanitize_cloudflare_id "$(create_kv "$KV_TITLE")")"
+    KV_ID="$(sanitize_kv_id "$(create_kv "$KV_TITLE")")"
   fi
   [[ -n "$KV_ID" ]] || die "无法获取 KV id"
 
-  KV_PREVIEW_ID="$(sanitize_cloudflare_id "$KV_PREVIEW_ID")"
+  KV_PREVIEW_ID="$(sanitize_kv_id "$KV_PREVIEW_ID")"
   if [[ -z "$KV_PREVIEW_ID" ]]; then
-    KV_PREVIEW_ID="$(sanitize_cloudflare_id "$(find_kv_id "$KV_TITLE" 1 || true)")"
+    KV_PREVIEW_ID="$(sanitize_kv_id "$(find_kv_id "$KV_TITLE" 1 || true)")"
   fi
   if [[ -z "$KV_PREVIEW_ID" ]]; then
-    KV_PREVIEW_ID="$(sanitize_cloudflare_id "$(create_kv "$KV_TITLE" --preview)")"
+    KV_PREVIEW_ID="$(sanitize_kv_id "$(create_kv "$KV_TITLE" --preview)")"
   fi
   [[ -n "$KV_PREVIEW_ID" ]] || die "无法获取 KV preview id"
 
@@ -1170,40 +1198,7 @@ run_deploy() {
   WRANGLER_CFG="$WRANGLER_LOCAL"
   [[ -f "$WRANGLER_CFG" ]] || die "缺少 $WRANGLER_CFG"
 
-  if cloudflare_api_token_available && [[ "$SKIP_DOMAIN_BIND" -eq 0 ]]; then
-    python3 -c "
-import json, sys
-from pathlib import Path
-
-def strip_jsonc(t):
-    out, i, ins, esc = [], 0, False, False
-    while i < len(t):
-        c = t[i]
-        if ins:
-            out.append(c)
-            if esc: esc = False
-            elif c == '\\\\': esc = True
-            elif c == '\"': ins = False
-            i += 1; continue
-        if c == '\"': ins = True; out.append(c); i += 1; continue
-        if c == '/' and i+1 < len(t) and t[i+1] == '/':
-            while i < len(t) and t[i] not in '\\n': i += 1
-            continue
-        out.append(c); i += 1
-    return ''.join(out)
-
-p = Path(sys.argv[1])
-text = p.read_text(encoding='utf-8')
-cfg = json.loads(strip_jsonc(text))
-if cfg.pop('routes', None) is not None:
-    p.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + '\\n', encoding='utf-8')
-" "$WRANGLER_CFG" 2>/dev/null || true
-  else
-    info "保留 wrangler routes（OAuth 模式或 --skip-domain-bind）"
-    if [[ "$PAUTH_NO_WORKERS_ROUTES" -eq 1 ]]; then
-      warn "无 Workers Routes 写权限：若 ${AUTH_HOST} 绑定失败，请到 Cloudflare Dashboard 手动处理域名冲突"
-    fi
-  fi
+  ensure_wrangler_custom_domain_route "$WRANGLER_CFG"
 
   info "上传 SESSION_SECRET"
   printf '%s' "$SESSION_SECRET" | wrangler_cmd secret put SESSION_SECRET -c "$WRANGLER_CFG"

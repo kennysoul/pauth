@@ -88,7 +88,12 @@ def build_desired(args: argparse.Namespace) -> dict[str, Any]:
                 "preview_id": args.kv_preview_id,
             }
         ],
-        # 自定义域名由 bind-custom-domain.py 绑定；勿写 routes，避免 wrangler deploy 需 Zone Workers Routes 权限
+        "routes": [
+            {
+                "pattern": args.auth_host,
+                "custom_domain": True,
+            }
+        ],
         "observability": {"enabled": True},
     }
     if args.account_id:
@@ -156,10 +161,27 @@ def merge_config(existing: dict[str, Any], desired: dict[str, Any]) -> dict[str,
     return merged
 
 
+def ensure_custom_domain_route(path: Path, auth_host: str) -> str:
+    if not path.exists():
+        return "MISSING"
+    cfg = load_jsonc(path)
+    routes = cfg.get("routes") or []
+    for row in routes:
+        if row.get("pattern") == auth_host and row.get("custom_domain"):
+            return "UNCHANGED"
+    cfg["routes"] = [{"pattern": auth_host, "custom_domain": True}]
+    path.write_text(dump_jsonc(cfg), encoding="utf-8")
+    return "ENSURED"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--target", required=True)
-    parser.add_argument("--policy", choices=("keep", "merge-bindings", "overwrite"), required=True)
+    parser.add_argument(
+        "--policy",
+        choices=("keep", "merge-bindings", "overwrite"),
+        required=False,
+    )
     parser.add_argument("--worker-name", required=True)
     parser.add_argument("--zone-name", required=True)
     parser.add_argument("--auth-host", required=True)
@@ -173,9 +195,21 @@ def main() -> int:
     parser.add_argument("--kv-preview-id", required=True)
     parser.add_argument("--account-id", default="")
     parser.add_argument("--diff-only", action="store_true")
+    parser.add_argument("--ensure-custom-domain-route", action="store_true")
     args = parser.parse_args()
 
     target = Path(args.target)
+
+    if args.ensure_custom_domain_route:
+        print(ensure_custom_domain_route(target, args.auth_host))
+        return 0
+
+    if not args.policy:
+        die_msg = "the following arguments are required: --policy"
+        print(f"usage: wrangler-config.py [-h] --target TARGET ...", file=sys.stderr)
+        print(f"wrangler-config.py: error: {die_msg}", file=sys.stderr)
+        return 2
+
     desired = build_desired(args)
 
     if not target.exists():

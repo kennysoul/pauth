@@ -239,8 +239,17 @@ def read_wrangler_jsonc(path: Path) -> dict[str, Any]:
     return json.loads(strip_jsonc(path.read_text(encoding="utf-8")))
 
 
-def sanitize_cloudflare_id(raw: str) -> str:
-    matches = re.findall(r"[0-9a-f]{32}", (raw or "").lower())
+def sanitize_kv_id(raw: str) -> str:
+    compact = re.sub(r"[^0-9a-fA-F]", "", raw or "")
+    matches = re.findall(r"[0-9a-f]{32}", compact.lower())
+    return matches[-1] if matches else ""
+
+
+def sanitize_d1_id(raw: str) -> str:
+    matches = re.findall(
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+        (raw or "").lower(),
+    )
     return matches[-1] if matches else ""
 
 
@@ -250,16 +259,16 @@ def apply_config_bindings(out: dict[str, Any], cfg: dict[str, Any]) -> None:
     d1 = (cfg.get("d1_databases") or [{}])[0]
     if d1.get("database_name"):
         out["d1_name"] = str(d1["database_name"])
-    d1_id = sanitize_cloudflare_id(str(d1.get("database_id") or ""))
+    d1_id = sanitize_d1_id(str(d1.get("database_id") or ""))
     if d1_id:
         out["d1_id"] = d1_id
     kv = (cfg.get("kv_namespaces") or [{}])[0]
     if kv.get("title"):
         out["kv_title"] = str(kv["title"])
-    kv_id = sanitize_cloudflare_id(str(kv.get("id") or ""))
+    kv_id = sanitize_kv_id(str(kv.get("id") or ""))
     if kv_id:
         out["kv_id"] = kv_id
-    kv_preview_id = sanitize_cloudflare_id(str(kv.get("preview_id") or ""))
+    kv_preview_id = sanitize_kv_id(str(kv.get("preview_id") or ""))
     if kv_preview_id:
         out["kv_preview_id"] = kv_preview_id
 
