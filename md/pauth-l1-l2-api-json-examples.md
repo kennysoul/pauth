@@ -45,7 +45,7 @@ Response headers:
 HTTP/1.1 200 OK
 X-Auth-User-Id: 4cf0ab13-c09b-44f8-aaa0-cb8a67c788be
 X-Auth-User-Email: admin@system.internal
-X-Auth-User-Name: Kenny
+X-Auth-User-Name: Alice
 X-Auth-User-Role: admin
 Cache-Control: private, no-store, must-revalidate
 ```
@@ -158,7 +158,7 @@ redirect_uri=https%3A%2F%2Fapp.example.com%2Fauth%2Fcallback
   "user": {
     "sub": "4cf0ab13-c09b-44f8-aaa0-cb8a67c788be",
     "email": "admin@system.internal",
-    "name": "Kenny"
+    "name": "Alice"
   }
 }
 ```
@@ -214,7 +214,7 @@ Authorization: Bearer at_30904a27db854524aaad4c9a2b71e1ae
 {
   "sub": "4cf0ab13-c09b-44f8-aaa0-cb8a67c788be",
   "email": "admin@system.internal",
-  "name": "Kenny"
+  "name": "Alice"
 }
 ```
 
@@ -309,7 +309,7 @@ Optional query: `?status=pending|active|disabled` (omit or `all` for every user)
   {
     "id": "4cf0ab13-c09b-44f8-aaa0-cb8a67c788be",
     "email": "admin@system.internal",
-    "name": "Kenny",
+    "name": "Alice",
     "role": "admin",
     "status": "active",
     "createdAt": "...",
@@ -351,7 +351,7 @@ Bootstrap admin is always `name: "root"` with `isRoot: true`. Open registration 
 Rename:
 
 ```json
-{ "name": "Kenny" }
+{ "name": "Alice" }
 ```
 
 Disable:

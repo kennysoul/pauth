@@ -3,8 +3,8 @@
 # Use after [Deploy to Cloudflare] badge: Workers Builds handles build + deploy.
 #
 # Examples:
-#   ./scripts/provision-cloudflare.sh --yes auth.kass.cc
-#   ./scripts/provision-cloudflare.sh --dir . --skip-clone --yes auth.kass.cc
+#   ./scripts/provision-cloudflare.sh --yes auth.example.com
+#   ./scripts/provision-cloudflare.sh --dir . --skip-clone --yes auth.example.com
 #
 # Self-contained: if scripts/lib/deploy-common.sh is missing, fetches it from GitHub.
 
@@ -23,7 +23,15 @@ pauth_load_common() {
   fi
   info() { printf '%b\n' "\033[0;32m→\033[0m $*"; }
   info "下载 deploy-common.sh…"
-  curl -fsSL "https://raw.githubusercontent.com/kennysoul/pauth/main/scripts/lib/deploy-common.sh" \
+  local fetch_repo="${PAUTH_REPO_URL:-https://github.com/your-org/pauth.git}"
+  local fetch_branch="${PAUTH_BRANCH:-main}"
+  local raw_base=""
+  if [[ "$fetch_repo" =~ github\.com[:/]+([^/]+)/([^/.]+)(\.git)?$ ]]; then
+    raw_base="https://raw.githubusercontent.com/${BASH_REMATCH[1]}/${BASH_REMATCH[2]}/${fetch_branch}"
+  else
+    die "无法从 PAUTH_REPO_URL 推导 GitHub raw URL"
+  fi
+  curl -fsSL "${raw_base}/scripts/lib/deploy-common.sh" \
     -o "$PAUTH_COMMON"
   PAUTH_FETCHED_COMMON=1
   trap '[[ "$PAUTH_FETCHED_COMMON" -eq 1 ]] && rm -f "$PAUTH_COMMON"' EXIT
@@ -39,7 +47,7 @@ Provision D1 + KV and write wrangler configs for pauth (no build/deploy).
 Pair with Deploy to Cloudflare badge + Workers Builds (npm run deploy:workers).
 
 常规用法:
-  ./provision-cloudflare.sh --yes auth.kass.cc
+  ./provision-cloudflare.sh --yes auth.example.com
 
 Options:
   --auth-host HOST        认证域名（必填，或作为 positional 参数）

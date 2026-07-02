@@ -5,10 +5,10 @@
 : "${SCRIPT_DIR:?SCRIPT_DIR must be set before sourcing deploy-common.sh}"
 
 # Defaults
-: "${DEFAULT_REPO:=https://github.com/kennysoul/pauth.git}"
+: "${DEFAULT_REPO:=${PAUTH_REPO_URL:-https://github.com/your-org/pauth.git}}"
 : "${DEFAULT_BRANCH:=main}"
 : "${DEFAULT_INSTALL_DIR:=$HOME/pauth}"
-: "${DEFAULT_RP_NAME:=Kass Auth}"
+: "${DEFAULT_RP_NAME:=Passkey Auth}"
 : "${DEFAULT_DB_LOCATION:=apac}"
 
 REPO_URL="${REPO_URL:-$DEFAULT_REPO}"
@@ -56,17 +56,17 @@ Usage: deploy-cloudflare.sh [options] [auth-host]
 Bootstrap pauth on Cloudflare: D1 + KV + wrangler config + deploy.
 
 常规用法（只需认证域名）:
-  ./deploy-cloudflare.sh --yes auth.kass.cc
-  ./deploy-cloudflare.sh --yes --auth-host auth.kass.cc
+  ./deploy-cloudflare.sh --yes auth.example.com
+  ./deploy-cloudflare.sh --yes --auth-host auth.example.com
 
-脚本会从 auth.kass.cc 推导 zone、Worker/D1/KV 名称与安装目录；
+脚本会从 auth.example.com 推导 zone、Worker/D1/KV 名称与安装目录；
 若该域名已有 Worker 或本地配置则升级，否则新建。
 
 Options:
   --repo URL              GitHub repo
   --branch NAME           Git branch (default: main)
   --dir PATH              Install directory (default: ~/pauth-<auth-host-slug>)
-  --zone DOMAIN           根域名（可选；默认从 auth-host 推导，如 auth.kass.cc → kass.cc）
+  --zone DOMAIN           根域名（可选；默认从 auth-host 推导，如 auth.example.com → example.com）
   --auth-host HOST        认证域名（必填，或作为唯一 positional 参数）
   --rp-name NAME          RP_NAME（默认从 zone 生成）
   --worker-name NAME      Worker 名称（默认 pauth-<auth-host-slug>；升级时自动探测）
@@ -97,6 +97,17 @@ to the Worker (overrides existing Worker/DNS on that hostname). --skip-domain-bi
 EOF
 }
 
+github_repo_raw_base() {
+  local repo="${1:-$REPO_URL}"
+  local branch="${2:-${GIT_BRANCH:-main}}"
+  if [[ "$repo" =~ github\.com[:/]+([^/]+)/([^/.]+)(\.git)?$ ]]; then
+    printf 'https://raw.githubusercontent.com/%s/%s/%s/scripts/lib' \
+      "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "$branch"
+    return 0
+  fi
+  return 1
+}
+
 ensure_helpers() {
   if [[ -f "$SCRIPT_DIR/lib/wrangler-config.py" && -f "$SCRIPT_DIR/lib/bind-custom-domain.py" ]]; then
     CONFIG_PY="$SCRIPT_DIR/lib/wrangler-config.py"
@@ -106,8 +117,12 @@ ensure_helpers() {
 
   HELPER_DIR="${TMPDIR:-/tmp}/pauth-deploy-$$"
   mkdir -p "$HELPER_DIR/lib"
-  local branch="${GIT_BRANCH:-main}"
-  local base="https://raw.githubusercontent.com/kennysoul/pauth/${branch}/scripts/lib"
+  local base=""
+  if base="$(github_repo_raw_base)"; then
+    :
+  else
+    die "无法从 --repo 推导 GitHub raw URL（需要 github.com/owner/repo 格式）"
+  fi
   if command -v curl >/dev/null 2>&1 \
      && curl -fsSL "$base/wrangler-config.py" -o "$HELPER_DIR/lib/wrangler-config.py" \
      && curl -fsSL "$base/bind-custom-domain.py" -o "$HELPER_DIR/lib/bind-custom-domain.py"; then
@@ -756,7 +771,7 @@ if [[ "$NON_INTERACTIVE" -eq 0 ]]; then
   info "目标: https://${AUTH_HOST}  模式: ${DEPLOY_MODE}"
   confirm "继续？" || exit 0
 else
-  [[ -n "$AUTH_HOST" ]] || die "--yes 需要认证域名，例如: --auth-host auth.kass.cc 或 positional auth.kass.cc"
+  [[ -n "$AUTH_HOST" ]] || die "--yes 需要认证域名，例如: --auth-host auth.example.com 或 positional auth.example.com"
   if [[ "$PROVISION_ONLY" -eq 1 ]]; then DEPLOY_MODE="${DEPLOY_MODE:-git}"; else DEPLOY_MODE="${DEPLOY_MODE:-local}"; fi
   CONFIG_POLICY="${CONFIG_POLICY:-merge-bindings}"
 fi

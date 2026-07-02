@@ -540,8 +540,8 @@ def bind_custom_domain(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Bind auth hostname to pauth Worker")
-    parser.add_argument("--hostname", required=True, help="e.g. auth.kass.cc")
-    parser.add_argument("--zone-name", help="e.g. kass.cc (optional; derived from --hostname when omitted)")
+    parser.add_argument("--hostname", required=True, help="e.g. auth.example.com")
+    parser.add_argument("--zone-name", help="e.g. example.com (optional; derived from --hostname when omitted)")
     parser.add_argument("--worker-name", default="passkey-auth")
     parser.add_argument("--config-path", help="Existing wrangler.local.jsonc for upgrade detection")
     parser.add_argument("--resolve", action="store_true", help="Print JSON deployment plan for auth hostname")

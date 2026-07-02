@@ -9,20 +9,20 @@
 #
 # 单文件下载即可运行；私有仓库在预检 3 会引导 GitHub 登录（gh auth login）。
 #
-#   curl -fsSL https://raw.githubusercontent.com/kennysoul/pauth/main/scripts/full-deploy-cloudflare.sh -o full-deploy.sh
+#   curl -fsSL https://raw.githubusercontent.com/your-org/pauth/main/scripts/full-deploy-cloudflare.sh -o full-deploy.sh
 #   chmod +x full-deploy.sh
-#   export CLOUDFLARE_API_TOKEN=...
-#   ./full-deploy.sh --yes auth.kass.cc
-#   ./full-deploy.sh --yes --auth-host auth.kass.cc
+#   export PAUTH_REPO_URL=https://github.com/your-org/pauth.git   # 或 --repo
+#   ./full-deploy.sh --yes auth.example.com
+#   ./full-deploy.sh --yes --auth-host auth.example.com
 
 set -euo pipefail
 
 # ── 默认配置 ──────────────────────────────────────────────────────────────────
 
-DEFAULT_REPO="https://github.com/kennysoul/pauth.git"
+DEFAULT_REPO="${PAUTH_REPO_URL:-https://github.com/your-org/pauth.git}"
 DEFAULT_BRANCH="main"
 DEFAULT_INSTALL_DIR="${HOME}/pauth"
-DEFAULT_RP_NAME="Kass Auth"
+DEFAULT_RP_NAME="Passkey Auth"
 DEFAULT_DB_LOCATION="apac"
 
 REPO_URL="$DEFAULT_REPO"
@@ -199,14 +199,14 @@ Usage: full-deploy-cloudflare.sh [options] [auth-host]
 单文件 Cloudflare 全量部署。预检通过后才执行 D1 / KV / build / deploy。
 
 常规用法（只需认证域名）:
-  ./full-deploy.sh --yes auth.kass.cc
+  ./full-deploy.sh --yes auth.example.com
 
-从 auth.kass.cc 自动推导 zone、Worker/D1/KV、安装目录；已有 Worker 则升级，否则新建。
+从 auth.example.com 自动推导 zone、Worker/D1/KV、安装目录；已有 Worker 则升级，否则新建。
 
 预检顺序：本机工具 → Cloudflare 基础权限 → Git 拉源码 → 部署目标（DNS/Worker/域名权限）
 
 Options:
-  --repo URL              GitHub 仓库（默认 kennysoul/pauth）
+  --repo URL              GitHub 仓库（默认 your-org/pauth，或 PAUTH_REPO_URL）
   --branch NAME           分支（默认 main）
   --dir PATH              安装目录（默认 ~/pauth-<auth-host-slug>）
   --zone DOMAIN           根域名（可选；默认从 auth-host 推导）
@@ -234,7 +234,7 @@ Options:
 私有仓库：预检 3 会引导 gh auth login；非交互模式请先完成 GitHub 登录。
 
 示例：
-  ./full-deploy.sh --yes auth.kass.cc --config-policy keep
+  ./full-deploy.sh --yes auth.example.com --config-policy keep
 EOF
 }
 
@@ -434,7 +434,7 @@ confirm() {
 
 collect_config() {
   if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
-    [[ -n "$AUTH_HOST" ]] || die "--yes 需要认证域名，例如: --auth-host auth.kass.cc 或 positional auth.kass.cc"
+    [[ -n "$AUTH_HOST" ]] || die "--yes 需要认证域名，例如: --auth-host auth.example.com 或 positional auth.example.com"
     DEPLOY_MODE="${DEPLOY_MODE:-local}"
     CONFIG_POLICY="${CONFIG_POLICY:-merge-bindings}"
     return 0

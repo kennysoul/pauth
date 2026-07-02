@@ -4,8 +4,8 @@
 # Self-contained: if scripts/lib/deploy-common.sh is missing, fetches it from GitHub.
 #
 # Examples:
-#   bash deploy-cloudflare.sh --yes auth.kass.cc
-#   bash deploy-cloudflare.sh --yes --auth-host auth.kass.cc --deploy-mode git
+#   bash deploy-cloudflare.sh --yes auth.example.com
+#   bash deploy-cloudflare.sh --yes --auth-host auth.example.com --deploy-mode git
 #   ./scripts/deploy-cloudflare.sh --deploy-mode git --config-policy keep --yes
 #   ./scripts/deploy-cloudflare.sh --dir . --skip-clone --provision-only --yes
 
@@ -24,7 +24,15 @@ pauth_load_common() {
   fi
   info() { printf '%b\n' "\033[0;32m→\033[0m $*"; }
   info "下载 deploy-common.sh…"
-  curl -fsSL "https://raw.githubusercontent.com/kennysoul/pauth/main/scripts/lib/deploy-common.sh" \
+  local fetch_repo="${PAUTH_REPO_URL:-https://github.com/your-org/pauth.git}"
+  local fetch_branch="${PAUTH_BRANCH:-main}"
+  local raw_base=""
+  if [[ "$fetch_repo" =~ github\.com[:/]+([^/]+)/([^/.]+)(\.git)?$ ]]; then
+    raw_base="https://raw.githubusercontent.com/${BASH_REMATCH[1]}/${BASH_REMATCH[2]}/${fetch_branch}"
+  else
+    die "无法从 PAUTH_REPO_URL 推导 GitHub raw URL"
+  fi
+  curl -fsSL "${raw_base}/scripts/lib/deploy-common.sh" \
     -o "$PAUTH_COMMON"
   PAUTH_FETCHED_COMMON=1
   trap '[[ "$PAUTH_FETCHED_COMMON" -eq 1 ]] && rm -f "$PAUTH_COMMON"' EXIT
@@ -39,7 +47,7 @@ Usage: deploy-cloudflare.sh [options] [auth-host]
 Bootstrap pauth on Cloudflare: D1 + KV + wrangler config + deploy.
 
 常规用法:
-  ./deploy-cloudflare.sh --yes auth.kass.cc
+  ./deploy-cloudflare.sh --yes auth.example.com
 
 Options:
   --auth-host HOST        认证域名（必填，或作为 positional 参数）

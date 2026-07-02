@@ -9,7 +9,7 @@
 
   "vars": {
     "RP_ID": "example.com",
-    "RP_NAME": "Kass Auth",
+    "RP_NAME": "Passkey Auth",
     "ORIGIN": "https://auth.example.com",
     "COOKIE_DOMAIN": ".example.com",
     "AUTH_HOST": "auth.example.com",
