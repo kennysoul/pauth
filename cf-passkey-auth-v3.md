@@ -2,6 +2,8 @@
 
 > **Workers + Assets + D1 + KV** · 中央认证 `auth.xxx.com` · **`.xxx.com` 共享 Cookie** · **Caddy Forward Auth** · **永远审批**
 
+> **pauth 扩展**：OAuth（`/api/l2/*`）、L1 网关权限、Google/Microsoft 社交登录、加密备份、部署脚本等见 `README.md` 与 `md/pauth-l1-l2-upgrade-plan-and-spec.md`。
+
 ---
 
 ## 1. 目标与范围
@@ -20,8 +22,8 @@
 ### 1.2 不在范围内
 
 - 跨 apex 域（如 `yyy.com`）
-- OAuth2/OIDC（`*.xxx.com` 共享 Cookie 已足够）
-- 按用户分配「可访问哪个子域」（审批通过即全站有效）
+- 按用户分配「可访问哪个子域」（审批通过 + L1 授权即全站有效）
+- OAuth / 应用级登录细节（见 `md/` 规范文档）
 
 ---
 
@@ -291,16 +293,25 @@ Cookie 值 = `sessionId` + HMAC；权威数据在 D1 `sessions`。
 
 管理员（sid + role=admin）
 ├── GET    /api/admin/config
-├── PATCH  /api/admin/config            仅 registrationEnabled
+├── PATCH  /api/admin/config            registrationEnabled（UI 在 **用户管理**）
 ├── GET    /api/admin/users?status=
-├── PATCH  /api/admin/users/:id           { "status": "active"|"disabled" }
-├── DELETE /api/admin/users/:id         仅 pending
-├── DELETE /api/admin/users/:id/passkeys/:pkId
+├── POST   /api/admin/users
+├── PATCH  /api/admin/users/:id           name / status（root 受保护）
+├── DELETE /api/admin/users/:id
+├── PUT    /api/admin/users/:id/permissions   { l1Enabled }
+├── GET/POST/DELETE /api/admin/users/:id/passkeys/*
+├── POST/DELETE /api/admin/users/:id/google-* / microsoft-*
+├── GET/POST/PATCH/DELETE /api/admin/clients
+├── POST   /api/admin/clients/:id/regenerate-secret
+├── GET/POST /api/admin/integration/webauth|google|microsoft
+├── POST   /api/admin/invites
+├── POST   /api/admin/backup/export|preview|import   不含 root
 ├── GET    /api/admin/audit-logs
 └── POST   /api/admin/system/reset
 
 静态：/* → ASSETS（SPA）
 页面：/setup · /login · /register · /admin/*
+  用户管理 · 应用管理 · 集成与安全 · 系统设置 · 审计日志
 ```
 
 ### GET /api/system/state
@@ -316,31 +327,36 @@ Cookie 值 = `sessionId` + HMAC；权威数据在 D1 `sessions`。
 
 ## 10. Forward Auth：`GET /api/verify`
 
-Caddy 将**原始请求的 Cookie** 转发到此端点。
+Caddy 将**原始请求的 Cookie** 转发到此端点。除有效会话外，还需 **L1 网关授权**（`user_l1_access.enabled`）。
 
 **逻辑**
 
 ```typescript
 async function verify(c: Context) {
-  const session = await resolveSession(c); // 读 sid，验 HMAC，查 D1
-  if (!session) return c.body(null, 401);
-  if (session.user.status !== 'active') return c.body(null, 401);
+  const session = await resolveSession(c);
+  const l1Ok = session ? await userHasL1Access(c.env, session.user.id) : false;
+  if (!session || session.user.status !== 'active' || !l1Ok) {
+    const returnTo = buildReturnToFromForwardedHeaders(c);
+    const loginUrl = `https://${c.env.AUTH_HOST}/login?return_to=...`;
+    return c.redirect(loginUrl, 302);
+  }
 
   return c.body(null, 200, {
     'X-Auth-User-Id': session.user.id,
     'X-Auth-User-Email': session.user.email,
     'X-Auth-User-Name': session.user.name,
     'X-Auth-User-Role': session.user.role,
+    'Cache-Control': 'private, no-store, must-revalidate',
   });
 }
 ```
 
 | 响应 | 含义 |
 |------|------|
-| `200` | 已登录且已审批，Caddy 放行 |
-| `401` | 未登录 / pending / disabled / session 过期 |
+| `200` | 已登录、已审批、有 L1 授权，Caddy 放行 |
+| `302` | 未登录 / pending / disabled / 无 L1 / session 过期 → 跳转 auth 登录页 |
 
-**注意**：仅 GET；不做 302（跳转由 Caddy 配置）。
+**注意**：未登录时返回 **302**（非 401），由 Caddy 跟随到 `auth.xxx.com/login?return_to=...`。
 
 ---
 
@@ -404,8 +420,8 @@ async function handleLogin(returnTo: string | null) {
 ```text
 NEEDS_SETUP → 访问任意页 → /setup
 
-POST /api/setup/begin { "name": "Alice" }
-  batch: 检查 state · 无既有 admin · INSERT admin(active) · INSERT setup session
+POST /api/setup/begin {}
+  batch: 检查 state · 无既有 admin · INSERT admin(name=root, active) · INSERT setup session
   Set-Cookie setup_sid
 
 POST /api/setup/passkey/options → KV challenge
@@ -416,7 +432,7 @@ POST /api/setup/passkey/verify
 → /admin
 ```
 
-此后 `/api/setup/*` 与 `/setup` 永久 403/redirect。
+首个管理员固定为 **`root`**（不可改名）。此后 `/api/setup/*` 与 `/setup` 永久 403/redirect。
 
 ### 12.2 普通用户注册（永远审批）
 
@@ -554,6 +570,7 @@ generateAuthenticationOptions({
 // PATCH /api/admin/config
 { "registrationEnabled": true }
 // 无 requireApproval 字段——永远审批
+// UI：开放注册开关在 **用户管理**，不在系统设置
 ```
 
 ### 用户管理
@@ -561,10 +578,26 @@ generateAuthenticationOptions({
 | 操作 | API |
 |------|-----|
 | 审批 | `PATCH /api/admin/users/:id` `{ "status": "active" }` |
-| 禁用 | `PATCH` `{ "status": "disabled" }`（不可禁自己；不可禁最后一个 active admin） |
-| 拒绝 pending | `DELETE /api/admin/users/:id`（CASCADE passkeys） |
+| 禁用 | `PATCH` `{ "status": "disabled" }`（不可禁自己；不可禁 root；不可禁最后一个 active admin） |
+| 删除 | `DELETE /api/admin/users/:id`（不可删 root） |
+| L1 网关 | `PUT /api/admin/users/:id/permissions` `{ "l1Enabled": true }` |
+| 邀请 | `POST /api/admin/invites` |
 
-禁用用户时 **DELETE 该用户全部 sessions**，verify 立即 401。
+**root 管理员**：setup 创建的首个 admin（`name: "root"`, `isRoot: true`），不可改名/禁用/删除；备份不含 root。
+
+禁用用户时 **DELETE 该用户全部 sessions**，verify 立即 302。
+
+### 加密备份（系统设置）
+
+```typescript
+POST /api/admin/backup/export   { password }
+POST /api/admin/backup/preview  { password, bundle }
+POST /api/admin/backup/import   { password, bundle }
+```
+
+- 信封 `pauth-backup-encrypted-v1`（PBKDF2 + AES-GCM）
+- 导出：除 root 外的用户、Passkey、应用、OAuth、L1、邀请、注册开关
+- 导入：清空非 root 数据并替换；**不覆盖** root 与 root Passkey
 
 ### 系统重置
 
@@ -582,32 +615,27 @@ D1 batch：审计 → 清 sessions/passkeys/users/audit → `state=NEEDS_SETUP` 
 ```text
 passkey-auth/
 ├── wrangler.jsonc
-├── migrations/0001_init.sql
+├── wrangler.local.jsonc          # 本地部署（gitignore）
+├── wrangler.production.jsonc     # Git Builds 模板
+├── scripts/deploy-cloudflare.sh  # npm run deploy:bootstrap
+├── migrations/0001_init.sql … 0007_root_admin_name.sql
 ├── src/
 │   ├── index.ts
 │   ├── lib/
-│   │   ├── session.ts       # Cookie Domain、HMAC、CRUD
-│   │   ├── challenge.ts     # KV
-│   │   ├── webauthn.ts
-│   │   ├── return-to.ts     # return_to 白名单
-│   │   ├── audit.ts
-│   │   └── csrf.ts
-│   ├── middleware/
 │   │   ├── session.ts
-│   │   ├── require-auth.ts
-│   │   └── require-admin.ts
+│   │   ├── challenge.ts
+│   │   ├── webauthn.ts
+│   │   ├── backup.ts / backup-crypto.ts
+│   │   ├── root-user.ts
+│   │   └── …
 │   └── routes/
 │       ├── system.ts        # state + verify
 │       ├── setup.ts
-│       ├── register.ts
-│       ├── login.ts
-│       ├── me.ts
-│       └── admin.ts
+│       ├── register.ts / login.ts / me.ts
+│       ├── l2.ts / oauth.ts
+│       └── admin.ts + admin-backup.ts + admin-oauth.ts
 └── app/                     # SPA → dist/
-    ├── routes/setup.tsx
-    ├── routes/login.tsx     # 读取 ?return_to=
-    ├── routes/register.tsx
-    └── routes/admin/*
+    └── pages/admin/         # 用户/应用/集成/设置/审计
 ```
 
 ---
@@ -616,10 +644,14 @@ passkey-auth/
 
 | 路径 | 条件 | 说明 |
 |------|------|------|
-| `/setup` | `NEEDS_SETUP` | 管理员 Passkey，完成后不再出现 |
-| `/login` | `ACTIVE` | Passkey 登录；支持 `?return_to=` |
+| `/setup` | `NEEDS_SETUP` | root 管理员 Passkey，完成后不再出现 |
+| `/login` | `ACTIVE` | Passkey / 社交登录；支持 `?return_to=` |
 | `/register` | `ACTIVE` + 注册开启 | 注册后提示待审批 |
-| `/admin/*` | admin + active | 用户审批、注册开关、重置 |
+| `/admin/users` | admin + active | 用户、L1、邀请、开放注册 |
+| `/admin/clients` | admin + active | OAuth 应用管理 |
+| `/admin/integration` | admin + active | Google / Microsoft / WEBAUTH |
+| `/admin/config` | admin + active | 加密备份、系统重置 |
+| `/admin/audit` | admin + active | 审计日志 |
 
 根路由 loader：
 
@@ -646,34 +678,43 @@ if (state === 'ACTIVE' && path.startsWith('/setup')) redirect('/login');
 | 重置 | 确认字符串 + admin + Origin |
 | 禁用 | 删 sessions |
 | 最后 admin | disable 时拒绝 |
+| root admin | 不可改名/禁用/删除；备份不含 root |
 | 子域 XSS | 仅信任可控子域共享 Cookie |
 
 ---
 
 ## 19. 本地开发与部署
 
-```bash
-npm install hono @simplewebauthn/server @simplewebauthn/browser drizzle-orm
+### 快速部署（推荐）
 
+```bash
+npm run deploy:bootstrap
+# 或
+./scripts/deploy-cloudflare.sh --zone xxx.com --auth-host auth.xxx.com --dir ~/pauth --yes
+```
+
+脚本会：创建 D1 + KV → 写入 `wrangler.local.jsonc` → 上传 `SESSION_SECRET` → 远程迁移 → 部署 → 自动绑定 Custom Domain。
+
+升级已有实例时可指定 `--config-policy keep|merge-bindings|overwrite`；Git Builds 用 `--deploy-mode git`。
+
+### 手动步骤
+
+```bash
+npm install
 wrangler d1 create passkey-auth-db
 wrangler kv namespace create CHALLENGES
-
-wrangler d1 migrations apply passkey-auth-db --local
-wrangler d1 migrations apply passkey-auth-db --remote
-
+npm run db:migrate:remote
 wrangler secret put SESSION_SECRET
-
-npm run build
-wrangler dev          # 本地 RP_ID=localhost
-wrangler deploy       # 绑定 auth.xxx.com 自定义域
+npm run build && npm run deploy
 ```
 
 **端到端验证顺序**
 
-1. Bootstrap → admin 登录
-2. `curl -b cookies auth.xxx.com/api/verify` → 200
-3. Caddy 保护测试子域 → 未登录跳 login → 登录后访问成功
-4. 开注册 → 用户 pending → verify 401 → 批准 → verify 200
+1. Bootstrap（root）→ admin 登录
+2. `curl -b cookies auth.xxx.com/api/verify` → 200（需 L1 授权）
+3. Caddy 保护测试子域 → 未登录 302 login → 登录后访问成功
+4. 开注册 → 用户 pending → verify 302 → 批准 + L1 → verify 200
+5. 系统设置 → 导出/导入加密备份（不含 root）
 
 ---
 

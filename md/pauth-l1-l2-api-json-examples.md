@@ -315,9 +315,35 @@ Optional query: `?status=pending|active|disabled` (omit or `all` for every user)
     "createdAt": "...",
     "passkeyCount": 1,
     "hasPendingInvite": false,
-    "l1Enabled": true
+    "l1Enabled": true,
+    "isRoot": false,
+    "googleEnabled": true,
+    "googleLinked": false,
+    "googleEmail": "",
+    "googleCanUnlink": false,
+    "googleAllowedEmail": "",
+    "microsoftEnabled": true,
+    "microsoftLinked": false,
+    "microsoftEmail": "",
+    "microsoftCanUnlink": false,
+    "microsoftAllowedEmail": "",
+    "hasPasskey": true
+  },
+  {
+    "id": "...",
+    "email": "admin@system.internal",
+    "name": "root",
+    "role": "admin",
+    "status": "active",
+    "isRoot": true,
+    "l1Enabled": true,
+    "passkeyCount": 1,
+    "hasPasskey": true
   }
 ]
+```
+
+Bootstrap admin is always `name: "root"` with `isRoot: true`. Open registration is toggled via `PATCH /api/admin/config` from **用户管理** (same API as before; UI moved from 系统设置).
 ```
 
 ### 7.2 Update user: `PATCH /api/admin/users/:id`
@@ -357,12 +383,24 @@ Response:
 
 ### 7.4 Delete user: `DELETE /api/admin/users/:id`
 
-Cannot delete yourself or the last active admin.
+Cannot delete yourself, **root** bootstrap admin, or the last active admin.
 
 ```json
 {
   "ok": true
 }
+```
+
+Root protection errors:
+
+```json
+{ "error": "不可删除 root 管理员" }
+```
+
+Non-root users cannot be renamed to `root`:
+
+```json
+{ "error": "名称 root 保留给首个管理员" }
 ```
 
 ---
@@ -419,7 +457,78 @@ PAUTH_TOKEN_URL=https://auth.example.com/api/l2/token
 
 ---
 
-## 10) Integrator notes
+## 10) Admin: Encrypted backup
+
+Password-protected export/import from **系统设置**. **Root admin is never included.**
+
+### 10.1 Export: `POST /api/admin/backup/export`
+
+```json
+{
+  "password": "your-backup-password-min-8-chars"
+}
+```
+
+Success:
+
+```json
+{
+  "ok": true,
+  "filename": "pauth-backup-2026-07-01.json",
+  "bundle": "{\"v\":1,\"kind\":\"pauth-backup-encrypted-v1\",...}",
+  "preview": {
+    "users": 3,
+    "passkeys": 2,
+    "clients": 1,
+    "oauthIdentities": 1,
+    "settings": 2,
+    "invites": 0,
+    "l1Grants": 2,
+    "exportedAt": "2026-07-01T12:00:00.000Z",
+    "registrationEnabled": true
+  }
+}
+```
+
+### 10.2 Preview import: `POST /api/admin/backup/preview`
+
+```json
+{
+  "password": "your-backup-password-min-8-chars",
+  "bundle": "<file contents>"
+}
+```
+
+### 10.3 Import: `POST /api/admin/backup/import`
+
+Same body as preview. Replaces non-root users, clients, and settings; refuses backups containing root data.
+
+---
+
+## 11) Setup (bootstrap)
+
+`POST /api/setup/begin` — no name in body; admin is always created as **`root`**.
+
+```json
+{}
+```
+
+Response:
+
+```json
+{
+  "ok": true,
+  "userId": "...",
+  "resumed": false,
+  "name": "root"
+}
+```
+
+Then `POST /api/setup/passkey/options` → browser Passkey → `POST /api/setup/passkey/verify` → `{ "redirect": "/admin" }`.
+
+---
+
+## 12) Integrator notes
 
 - **`state`** is required; verify it in your callback handler.
 - **`redirect_uri`** must match exactly between authorize and token requests. Any HTTPS URL is accepted (no per-client registration).
@@ -432,7 +541,7 @@ PAUTH_TOKEN_URL=https://auth.example.com/api/l2/token
 
 ---
 
-## 11) Error code reference
+## 13) Error code reference
 
 | HTTP | error | Typical cause |
 |------|-------|----------------|

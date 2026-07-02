@@ -42,7 +42,9 @@ There is **no per-app user grant** in pauth. Registering a new OAuth client make
 
 ## 2) Data Model (implemented)
 
-Migrations: `0001_init.sql`, `0002_l1_l2_clients.sql`, `0003_l2_oauth.sql`, `0004_client_secret_plain.sql`
+Migrations: `0001_init.sql` … `0007_root_admin_name.sql` (see `migrations/`)
+
+Latest additions: `0005_social_oauth.sql`, `0006_passkey_delegate.sql`, `0007_root_admin_name.sql`.
 
 ### 2.1 `clients`
 
@@ -79,6 +81,14 @@ Admin UI shows `access_mode` as **「需 L1 网关」** checkbox (`L1_AND_L2` = 
 
 - Admin-created invite tokens for Passkey registration with optional pre-set L1 (7-day TTL, single-use)
 
+### 2.7 `oauth_identities` (migration `0005`)
+
+- Links pauth users to Google / Microsoft accounts; admin allow-list email per user
+
+### 2.8 `passkey_delegate_tokens` (migration `0006`)
+
+- One-time admin-generated links for registering Passkey on behalf of a user
+
 ---
 
 ## 3) API Overview (implemented)
@@ -88,7 +98,7 @@ Admin UI shows `access_mode` as **「需 L1 网关」** checkbox (`L1_AND_L2` = 
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/api/system/state` | `{ state, registrationEnabled, origin }` |
-| GET | `/api/verify` | L1 forward-auth (requires L1 grant + active session) |
+| GET | `/api/verify` | L1 forward-auth (302 → login if unauthenticated; 200 + headers if active + L1) |
 | GET | `/api/l2/authorize` | Start OAuth flow |
 | POST | `/api/l2/token` | Exchange code for token |
 | GET | `/api/l2/userinfo` | User profile from Bearer token |
@@ -100,19 +110,46 @@ Admin UI shows `access_mode` as **「需 L1 网关」** checkbox (`L1_AND_L2` = 
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET/PATCH | `/config` | Registration toggle |
-| GET | `/users` | List users with L1 flag |
-| PATCH | `/users/:id` | Update `name` and/or `status` |
-| DELETE | `/users/:id` | Delete user (not self, not last admin) |
+| GET/PATCH | `/config` | Registration toggle (`registrationEnabled`) |
+| GET | `/users` | List users (L1, OAuth, Passkey, `isRoot`) |
+| POST | `/users` | Create user |
+| PATCH | `/users/:id` | Update `name` / `status` (root protected) |
+| DELETE | `/users/:id` | Delete user (root protected) |
 | PUT | `/users/:id/permissions` | Set `{ l1Enabled }` |
-| POST | `/invites` | Create user + invite URL `{ name, role, l1Enabled? }` |
-| GET/POST | `/clients` | List / create OAuth clients |
-| PATCH/DELETE | `/clients/:clientId` | Update / delete client |
-| POST | `/clients/:clientId/regenerate-secret` | Rotate client secret |
+| GET/POST/DELETE | `/users/:id/passkeys/*` | Passkey list, delegate link, delete |
+| POST/DELETE | `/users/:id/google-*`, `/microsoft-*` | OAuth allow-list / unlink |
+| POST | `/invites` | Create user + invite URL |
+| GET/POST/PATCH/DELETE | `/clients` | OAuth client CRUD + secret rotate |
+| GET/POST | `/integration/webauth`, `/google`, `/microsoft` | Social login + WEBAUTH config |
+| POST | `/backup/export`, `/preview`, `/import` | Password-encrypted backup (excludes root) |
 | GET | `/audit-logs` | Audit log query |
 | POST | `/system/reset` | Factory reset |
 
-Admin UI: user management (L1 only), application management, invite flow.
+Admin UI pages: **用户管理** (incl. open registration), **应用管理**, **集成与安全**, **系统设置** (backup + reset), **审计日志**.
+
+### 3.3 Root bootstrap admin
+
+- Setup creates a single bootstrap admin named **`root`** (fixed; UI does not accept another name)
+- Identified as earliest-created admin (`createdAt`); migration `0007` renames legacy bootstrap admin to `root`
+- **Protected:** cannot rename, disable, or delete; display name `root` reserved for this account only
+- Encrypted backup export/import **never includes** root user, root Passkeys, or root OAuth rows
+
+### 3.4 Encrypted backup
+
+- Envelope: `pauth-backup-encrypted-v1` (PBKDF2 + AES-GCM)
+- Payload kind: `pauth-backup-v1`
+- Includes: non-root users, passkeys, clients, settings, OAuth identities, L1 grants, invites, `registrationEnabled`
+- Excludes: root admin, sessions, audit logs
+- Import: wipes non-root users and related rows; replaces clients/settings; does not touch root
+
+### 3.5 Deploy tooling
+
+Script `scripts/deploy-cloudflare.sh` (`npm run deploy:bootstrap`):
+
+- Provisions D1 + KV; writes `wrangler.local.jsonc` and optionally `wrangler.production.jsonc`
+- Config merge on upgrade: keep / merge-bindings / overwrite
+- Deploy modes: **local** (`wrangler deploy`) or **git** (prepare Cloudflare Builds)
+- Auto-binds `AUTH_HOST` Custom Domain when zone is on the account (`scripts/lib/bind-custom-domain.py`)
 
 ---
 
@@ -171,9 +208,13 @@ Passkey authentication happens on the auth host during the authorize flow; the a
 | Schema (clients, grants, codes, tokens, invites) | Done |
 | L1 `/api/verify` with `user_l1_access` | Done |
 | OAuth authorize / token / userinfo | Done |
+| Google / Microsoft social login | Done |
 | Admin client CRUD + secret management | Done |
-| Admin user L1 + invites | Done |
-| Admin UI | Done |
+| Admin user L1 + invites + Passkey delegate | Done |
+| Encrypted backup (root excluded) | Done |
+| Root admin protection | Done |
+| Deploy bootstrap script + domain bind | Done |
+| Admin UI (SuMusic-style) | Done |
 | SuMusic / external app OAuth adapter | App-side (not in pauth repo) |
 
 ---
@@ -185,6 +226,7 @@ Passkey authentication happens on the auth host during the authorize flow; the a
 - [x] OAuth token exchange validates client secret and redirect_uri match
 - [x] `L1_AND_L2` client blocks users without L1
 - [x] Disabling user blocks next authorize/token
+- [x] Root admin cannot be renamed/disabled/deleted; backup excludes root
 - [ ] Audit log filters by layer/client (basic logging exists; filtered UI TBD)
 
 ---
@@ -193,7 +235,7 @@ Passkey authentication happens on the auth host during the authorize flow; the a
 
 - OIDC discovery / JWKS
 - JWT id_tokens (opaque `id_token` placeholder only)
-- Social login providers
 - Per-client redirect URI allowlists
 - Per-app user grants in pauth (apps manage their own authorization)
 - Fine-grained consent UI beyond `openid profile`
+- Automated D1 migration on Git push (run `db:migrate:remote` manually after schema changes)

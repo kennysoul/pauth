@@ -1,5 +1,7 @@
 # Cloudflare Workers + Pages + D1 Passkey 认证系统 v2
 
+> **已过时**：当前实现见 `cf-passkey-auth-v3.md`、`README.md` 与 `md/pauth-l1-l2-upgrade-plan-and-spec.md`。本文档保留作历史参考。
+
 > 新增功能：管理员引导注册（Bootstrap）、注册开关+审批、管理员后台（用户管理/系统重置）
 
 ---

@@ -30,6 +30,39 @@ Open `https://auth.<your-domain>/setup` (via your reverse proxy) or http://127.0
 
 **Passkey flows require a real browser** (Safari/Chrome with platform authenticator or security key).
 
+### First-time setup
+
+1. Visit `/setup` — register Passkey for the fixed **root** bootstrap admin (name is always `root`)
+2. Admin panel at `/admin`
+3. Enable self-registration in **用户管理** (toggle at top of user list)
+4. Register a test user at `/register` — approve in **用户管理**
+
+### Admin console
+
+| Page | Purpose |
+|------|---------|
+| 用户管理 | Users, open registration toggle, L1 grants, Passkey/OAuth per user |
+| 应用管理 | OAuth clients (L2 / L1+L2) |
+| 集成与安全 | Google / Microsoft OAuth, WEBAUTH runtime display |
+| 系统设置 | Encrypted backup export/import, factory reset |
+| 审计日志 | Audit trail |
+
+### Root bootstrap admin
+
+- First admin created at setup is always named **`root`** (earliest-created admin by `createdAt`)
+- **Cannot** rename, disable, or delete `root`
+- Other users cannot use the display name `root`
+- Encrypted backup **excludes** `root` and their Passkey/OAuth data; import never overwrites `root`
+
+### Disaster recovery (encrypted backup)
+
+Admin **系统设置 → 加密备份**:
+
+- **Export:** password (≥8 chars) → AES-GCM encrypted JSON download
+- **Import:** file + password → preview → confirm; replaces all non-root users, clients, and settings
+
+API: `POST /api/admin/backup/export|preview|import` (admin session required).
+
 ### Smoke test (API only)
 
 ```bash
@@ -37,15 +70,8 @@ curl -s http://localhost:8787/api/system/state
 # → {"state":"NEEDS_SETUP",...}
 
 curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8787/api/verify
-# → 401
+# → 302
 ```
-
-### First-time setup
-
-1. Visit `/setup` — create admin + register Passkey
-2. Admin panel at `/admin`
-3. Enable registration in **系统设置**
-4. Register a test user at `/register` — approve in **待审批**
 
 ### Verify API (Forward Auth)
 
@@ -162,86 +188,22 @@ curl -sk -o /dev/null -w "%{http_code} -> %{redirect_url}\n" \
 # → 302 -> https://auth.xxx.com/login?return_to=...
 ```
 
-## Deploy via GitHub (Cloudflare Workers)
+## Deploy to Cloudflare
 
-### 1. One-time Cloudflare setup
+Recommended: use the bootstrap script (`npm run deploy:bootstrap`). It creates D1 + KV, writes wrangler config, uploads `SESSION_SECRET`, runs migrations, deploys (local mode), and **auto-binds** `AUTH_HOST` as a Worker Custom Domain.
 
-```bash
-# Create resources (run locally once)
-npx wrangler d1 create passkey-auth-db
-npx wrangler kv namespace create CHALLENGES
-```
-
-Copy the returned IDs into `wrangler.local.jsonc` (`database_id`, KV `id`). Keep `wrangler.jsonc` as placeholders only.
-
-Set production **vars** in `wrangler.local.jsonc` (or Cloudflare dashboard → Settings → Variables):
-
-| Var | Example |
-|-----|---------|
-| `RP_ID` | `xxx.com` |
-| `ORIGIN` | `https://auth.xxx.com` |
-| `COOKIE_DOMAIN` | `.xxx.com` |
-| `AUTH_HOST` | `auth.xxx.com` |
-
-Set **secret** (Dashboard → Settings → Secrets, or CLI):
-
-```bash
-npx wrangler secret put SESSION_SECRET
-```
-
-Apply database migration to production:
-
-```bash
-npm run db:migrate:remote
-```
-
-Add custom domain `auth.xxx.com` in Cloudflare Workers → Settings → Domains.
-
-### 2. Push to GitHub
-
-```bash
-git init
-git add .
-git commit -m "Initial passkey auth (v3)"
-git branch -M main
-git remote add origin https://github.com/YOUR_USER/passkey-auth.git
-git push -u origin main
-```
-
-### 3. Connect Cloudflare to GitHub
-
-1. [Cloudflare Dashboard](https://dash.cloudflare.com) → **Workers & Pages** → **Create**
-2. Choose **Connect to Git** → authorize GitHub → select this repository
-3. Build settings:
-   - **Build command:** `npm run build`
-   - **Deploy command:** `npx wrangler deploy --config wrangler.local.jsonc`
-   - **Root directory:** `/` (repo root)
-4. Ensure D1/KV bindings in your deploy config (`wrangler.local.jsonc` or dashboard) match the created resources
-5. Add `SESSION_SECRET` under **Settings → Variables and Secrets**
-6. Save and deploy
-
-Each push to `main` triggers a new deployment.
-
-### Manual deploy (alternative)
-
-```bash
-npm run deploy
-```
-
-### One-shot bootstrap script (new machine / fresh VPS)
-
-Interactive installer: provisions D1 + KV, writes wrangler config (with merge/keep on upgrade), then deploys locally **or** prepares GitHub Builds.
+### Bootstrap script
 
 ```bash
 npm run deploy:bootstrap
 
-# Non-interactive — local deploy, merge existing wrangler.local.jsonc
+# Non-interactive — local deploy
 ./scripts/deploy-cloudflare.sh --zone kass.cc --auth-host auth.kass.cc --dir ~/pauth --yes
 
-# Git mode — generate wrangler.production.jsonc, skip local deploy
+# Git mode — generate wrangler.production.jsonc for Cloudflare Builds
 ./scripts/deploy-cloudflare.sh --zone kass.cc --deploy-mode git --config-policy merge-bindings --yes
 
-# Upgrade run — keep your wrangler vars, only refresh if you choose
+# Upgrade — keep existing wrangler config unchanged
 ./scripts/deploy-cloudflare.sh --dir ~/pauth --skip-clone --config-policy keep --yes
 ```
 
@@ -252,21 +214,42 @@ npm run deploy:bootstrap
 | `wrangler.local.jsonc` | Local `wrangler deploy` / dev | gitignored |
 | `wrangler.production.jsonc` | Cloudflare Git Builds CI | commit to private repo |
 
-When a config file already exists, the script prompts:
+When a config file already exists, the script prompts: **保留** / **仅同步 D1/KV** / **完全覆盖**.
 
-1. **保留** — do not overwrite (version bump, config unchanged)
-2. **仅同步 D1/KV ID** — keep your `vars`, update resource bindings
-3. **完全覆盖** — rewrite from current parameters
+The script verifies the zone is on your Cloudflare account and force-binds `AUTH_HOST` to the Worker (overrides conflicting Worker/DNS). Use `--skip-domain-bind` to skip.
 
-**Before running:** `npx wrangler login` (or `CLOUDFLARE_API_TOKEN`), domain on Cloudflare, private repo access for clone.
+### GitHub Builds (optional)
 
-The script verifies that `--zone` / `AUTH_HOST` belong to your Cloudflare account, then **force-binds** `auth.example.com` to the `passkey-auth` Worker (overriding an existing Worker or DNS record on that hostname). Use `--skip-domain-bind` to skip.
+After `--deploy-mode git`:
 
-**Git Builds** (after `--deploy-mode git`): connect repo in Dashboard; deploy command:
+1. Install [Cloudflare Workers & Pages GitHub App](https://developers.cloudflare.com/workers/ci-cd/builds/git-integration/github-integration/) on your private repo
+2. Dashboard → Worker → Settings → Builds → Connect to Git
+3. **Build:** `npm run build` · **Deploy:** `npx wrangler deploy --config wrangler.production.jsonc`
+4. Commit `wrangler.production.jsonc` to the repo; keep `SESSION_SECRET` in Cloudflare Secrets only
+5. Run `npm run db:migrate:remote` manually after schema migrations
 
-`npx wrangler deploy --config wrangler.production.jsonc`
+See `wrangler.production.jsonc.example`.
 
-See `wrangler.production.jsonc.example` for shape. `SESSION_SECRET` stays in Cloudflare Secrets, not in the file.
+### Manual deploy (existing checkout)
+
+```bash
+cp wrangler.local.jsonc.example wrangler.local.jsonc   # fill in IDs + domain
+cp .dev.vars.example .dev.vars                           # SESSION_SECRET
+npm install && npm run db:migrate:remote && npm run deploy
+```
+
+Production **vars** (`wrangler.local.jsonc` or Dashboard):
+
+| Var | Example |
+|-----|---------|
+| `RP_ID` | `xxx.com` |
+| `ORIGIN` | `https://auth.xxx.com` |
+| `COOKIE_DOMAIN` | `.xxx.com` |
+| `AUTH_HOST` | `auth.xxx.com` |
+
+```bash
+npx wrangler secret put SESSION_SECRET -c wrangler.local.jsonc
+```
 
 ## Production vars example
 

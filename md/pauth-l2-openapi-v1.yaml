@@ -7,7 +7,7 @@ info:
 
     - L1: gateway forward-auth (`GET /api/verify`)
     - OAuth: app login (`/api/l2/authorize`, `/api/l2/token`, `/api/l2/userinfo`)
-    - Admin: clients, users, L1 permissions, invites (`/api/admin/*`)
+    - Admin: clients, users, L1 permissions, invites, backup, integration (`/api/admin/*`)
 
     All active pauth users may OAuth into registered clients. Per-app authorization is managed by each application.
 
@@ -164,6 +164,37 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /api/admin/config:
+    get:
+      tags: [Admin]
+      summary: Get system config
+      security:
+        - cookieSid: []
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemConfig"
+    patch:
+      tags: [Admin]
+      summary: Update registration toggle
+      description: Open-registration toggle is also exposed in the Users admin UI.
+      security:
+        - cookieSid: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PatchSystemConfigRequest"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+
   /api/admin/clients:
     get:
       tags: [Admin]
@@ -297,6 +328,7 @@ paths:
     delete:
       tags: [Admin]
       summary: Delete user
+      description: Cannot delete self, root bootstrap admin, or last active admin.
       security:
         - cookieSid: []
       parameters:
@@ -304,6 +336,142 @@ paths:
           name: userId
           required: true
           schema: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+
+  /api/admin/backup/export:
+    post:
+      tags: [Admin]
+      summary: Export password-encrypted backup (excludes root admin)
+      security:
+        - cookieSid: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BackupPasswordRequest"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupExportResponse"
+
+  /api/admin/backup/preview:
+    post:
+      tags: [Admin]
+      summary: Preview backup import
+      security:
+        - cookieSid: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BackupImportRequest"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupPreviewResponse"
+
+  /api/admin/backup/import:
+    post:
+      tags: [Admin]
+      summary: Import backup (replaces non-root data)
+      security:
+        - cookieSid: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BackupImportRequest"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+
+  /api/admin/integration/google:
+    get:
+      tags: [Admin]
+      summary: Get Google OAuth integration config
+      security:
+        - cookieSid: []
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GoogleIntegrationConfig"
+    post:
+      tags: [Admin]
+      summary: Save Google OAuth integration config
+      security:
+        - cookieSid: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GoogleIntegrationConfig"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+
+  /api/admin/integration/microsoft:
+    get:
+      tags: [Admin]
+      summary: Get Microsoft OAuth integration config
+      security:
+        - cookieSid: []
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MicrosoftIntegrationConfig"
+    post:
+      tags: [Admin]
+      summary: Save Microsoft OAuth integration config
+      security:
+        - cookieSid: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MicrosoftIntegrationConfig"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+
+  /api/admin/system/reset:
+    post:
+      tags: [Admin]
+      summary: Factory reset (returns system to NEEDS_SETUP)
+      security:
+        - cookieSid: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SystemResetRequest"
       responses:
         "200":
           content:
@@ -486,6 +654,105 @@ components:
         passkeyCount: { type: integer }
         hasPendingInvite: { type: boolean }
         l1Enabled: { type: boolean }
+        isRoot:
+          type: boolean
+          description: True for bootstrap admin (name root); cannot rename/disable/delete
+        googleEnabled: { type: boolean }
+        googleLinked: { type: boolean }
+        microsoftEnabled: { type: boolean }
+        microsoftLinked: { type: boolean }
+        hasPasskey: { type: boolean }
+
+    SystemConfig:
+      type: object
+      required: [registrationEnabled]
+      properties:
+        registrationEnabled: { type: boolean }
+
+    PatchSystemConfigRequest:
+      type: object
+      properties:
+        registrationEnabled: { type: boolean }
+
+    BackupPasswordRequest:
+      type: object
+      required: [password]
+      properties:
+        password:
+          type: string
+          minLength: 8
+
+    BackupImportRequest:
+      type: object
+      required: [password, bundle]
+      properties:
+        password:
+          type: string
+          minLength: 8
+        bundle:
+          type: string
+          description: Encrypted backup file contents (pauth-backup-encrypted-v1)
+
+    BackupPreview:
+      type: object
+      properties:
+        users: { type: integer }
+        passkeys: { type: integer }
+        clients: { type: integer }
+        oauthIdentities: { type: integer }
+        settings: { type: integer }
+        invites: { type: integer }
+        l1Grants: { type: integer }
+        exportedAt: { type: string, format: date-time }
+        registrationEnabled: { type: boolean }
+
+    BackupExportResponse:
+      type: object
+      required: [ok, filename, bundle, preview]
+      properties:
+        ok: { type: boolean, const: true }
+        filename: { type: string }
+        bundle: { type: string }
+        preview:
+          $ref: "#/components/schemas/BackupPreview"
+
+    BackupPreviewResponse:
+      type: object
+      required: [preview]
+      properties:
+        preview:
+          $ref: "#/components/schemas/BackupPreview"
+
+    GoogleIntegrationConfig:
+      type: object
+      properties:
+        enabled: { type: boolean }
+        clientId: { type: string }
+        redirectUri: { type: string, format: uri }
+        scopes: { type: string }
+        clientSecretSet:
+          type: boolean
+          description: True if a client secret is stored (secret never returned)
+
+    MicrosoftIntegrationConfig:
+      type: object
+      properties:
+        enabled: { type: boolean }
+        tenantId: { type: string }
+        clientId: { type: string }
+        redirectUri: { type: string, format: uri }
+        scopes: { type: string }
+        clientSecretSet:
+          type: boolean
+          description: True if a client secret is stored (secret never returned)
+
+    SystemResetRequest:
+      type: object
+      required: [confirmation]
+      properties:
+        confirmation:
+          type: string
+          enum: [RESET_ALL_I_UNDERSTAND]
 
     UpdateUserRequest:
       type: object
