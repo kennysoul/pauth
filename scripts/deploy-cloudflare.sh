@@ -4,8 +4,8 @@
 # Self-contained: if scripts/lib/deploy-common.sh is missing, fetches it from GitHub.
 #
 # Examples:
-#   curl -fsSL .../deploy-cloudflare.sh | bash
-#   bash deploy-cloudflare.sh --zone kass.cc --auth-host auth.kass.cc --yes
+#   bash deploy-cloudflare.sh --yes auth.kass.cc
+#   bash deploy-cloudflare.sh --yes --auth-host auth.kass.cc --deploy-mode git
 #   ./scripts/deploy-cloudflare.sh --deploy-mode git --config-policy keep --yes
 #   ./scripts/deploy-cloudflare.sh --dir . --skip-clone --provision-only --yes
 
@@ -34,24 +34,28 @@ pauth_load_common() {
 
 deploy_usage() {
   cat <<'EOF'
-Usage: deploy-cloudflare.sh [options]
+Usage: deploy-cloudflare.sh [options] [auth-host]
 
 Bootstrap pauth on Cloudflare: D1 + KV + wrangler config + deploy.
 
+常规用法:
+  ./deploy-cloudflare.sh --yes auth.kass.cc
+
 Options:
+  --auth-host HOST        认证域名（必填，或作为 positional 参数）
   --repo URL              GitHub repo
   --branch NAME           Git branch (default: main)
-  --dir PATH              Install directory (default: ~/pauth)
-  --zone DOMAIN           Apex zone on Cloudflare (required with --yes)
-  --auth-host HOST        Auth hostname (default: auth.<zone>)
-  --rp-name NAME          RP_NAME (default: Kass Auth)
-  --worker-name NAME      Worker name (default: passkey-auth)
-  --d1-name NAME          D1 database name
-  --kv-title TITLE        KV namespace title
+  --dir PATH              Install directory (default: ~/pauth-<auth-host-slug>)
+  --zone DOMAIN           根域名（可选；默认从 auth-host 推导）
+  --rp-name NAME          RP_NAME（默认从 zone 生成）
+  --worker-name NAME      Worker name (default: pauth-<auth-host-slug>)
+  --d1-name NAME          D1 database name (default: pauth-<auth-host-slug>-db)
+  --kv-title TITLE        KV namespace title (default: CHALLENGES-pauth-<auth-host-slug>)
   --db-location LOC       D1 location hint (default: apac)
   --session-secret STR    SESSION_SECRET (auto-generated if empty)
   --deploy-mode MODE      local | git
   --config-policy POLICY  keep | merge-bindings | overwrite
+  --allow-worker-overwrite  Allow deploying to a Worker bound to another hostname
   --provision-only        Stop after D1/KV/config (same as provision-cloudflare.sh)
   --rotate-secret         Update SESSION_SECRET even if .dev.vars exists
   --git-first-deploy      Git mode: also run one local wrangler deploy now

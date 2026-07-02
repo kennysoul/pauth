@@ -136,17 +136,23 @@ def diff_summary(existing: dict[str, Any], desired: dict[str, Any]) -> list[str]
 
 
 def merge_config(existing: dict[str, Any], desired: dict[str, Any]) -> dict[str, Any]:
+    """Sync D1/KV bindings and scaffold fields; preserve existing vars values."""
     merged = json.loads(json.dumps(existing))
     merged["d1_databases"] = desired["d1_databases"]
     merged["kv_namespaces"] = desired["kv_namespaces"]
-    merged.pop("routes", None)
+    if "routes" in desired:
+        merged["routes"] = desired["routes"]
     for key in ("$schema", "main", "compatibility_date", "compatibility_flags", "assets", "observability"):
         if key in desired:
             merged[key] = desired[key]
     if desired.get("account_id"):
         merged["account_id"] = desired["account_id"]
     merged["name"] = desired["name"]
-    merged["vars"] = desired["vars"]
+    existing_vars = dict(merged.get("vars") or {})
+    for key, value in (desired.get("vars") or {}).items():
+        if key not in existing_vars:
+            existing_vars[key] = value
+    merged["vars"] = existing_vars
     return merged
 
 

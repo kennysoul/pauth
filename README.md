@@ -190,12 +190,86 @@ curl -sk -o /dev/null -w "%{http_code} -> %{redirect_url}\n" \
 
 ## Deploy to Cloudflare
 
+### Quick start（推荐：只传认证域名）
+
+大多数场景只需 **一个参数** — 你的 Passkey 认证域名。脚本会从它推导 zone、Worker、D1、KV、安装目录等；**没有对应 Worker 则新建，已有则升级**。
+
+```bash
+npx wrangler login   # 首次需要
+
+# 单文件一键部署（从 GitHub 拉源码 + 部署）
+curl -fsSL https://raw.githubusercontent.com/kennysoul/pauth/main/scripts/full-deploy-cloudflare.sh -o full-deploy.sh
+chmod +x full-deploy.sh
+./full-deploy.sh --yes auth.kass.cc
+
+# 仓库内
+./scripts/full-deploy-cloudflare.sh --yes auth.kass.cc
+npm run deploy:full -- --yes auth.kass.cc
+```
+
+等价写法：
+
+```bash
+./full-deploy.sh --yes --auth-host auth.kass.cc
+```
+
+完成后访问 `https://auth.kass.cc/setup` 注册 **root** 管理员 Passkey。
+
+#### 从 `auth.kass.cc` 自动推导
+
+| 项目 | 规则 | 示例 |
+|------|------|------|
+| 根域名 (zone) | 去掉最左侧子域 | `kass.cc` |
+| Worker | `pauth-<auth-host-slug>` | `pauth-auth-kass-cc` |
+| D1 | `pauth-<auth-host-slug>-db` | `pauth-auth-kass-cc-db` |
+| KV | `CHALLENGES-pauth-<auth-host-slug>` | `CHALLENGES-pauth-auth-kass-cc` |
+| 安装目录 | `~/pauth-<auth-host-slug>` | `~/pauth-auth-kass-cc` |
+| `RP_ID` / Cookie | 来自 zone | `.kass.cc` |
+| `ORIGIN` | `https://<auth-host>` | `https://auth.kass.cc` |
+
+每个 auth 域名 **独立一套** Worker + D1 + KV，部署多个域名互不冲突。
+
+#### 新建 vs 升级
+
+| 情况 | 行为 |
+|------|------|
+| 该域名尚无 Worker / 本地无配置 | **新建** D1、KV、Worker |
+| `~/pauth-<slug>/wrangler.local.jsonc` 已存在且 `AUTH_HOST` 匹配 | **升级**，保留 vars 与资源 ID |
+| Cloudflare 上该域名已绑定 Worker（需 API Token） | **升级**，自动沿用该 Worker |
+
+再次执行同一命令 = 升级部署（默认 `merge-bindings`）。
+
+#### 多个域名
+
+```bash
+./scripts/full-deploy-cloudflare.sh --yes auth.kass.cc
+./scripts/full-deploy-cloudflare.sh --yes auth.cdnc.us
+```
+
+#### 高级选项（可选）
+
+默认行为已覆盖常见需求；以下参数供高级用户覆盖：
+
+| 参数 | 用途 |
+|------|------|
+| `--zone` | 手动指定根域名（复杂后缀如 `co.uk` 时） |
+| `--dir` | 自定义安装目录（默认 `~/pauth-<slug>`） |
+| `--worker-name` | 固定 Worker 名（如沿用旧名 `passkey-auth`） |
+| `--d1-name` / `--kv-title` | 自定义 D1 / KV 名称 |
+| `--deploy-mode git` | 生成 `wrangler.production.jsonc` 供 Workers Builds |
+| `--config-policy keep\|merge-bindings\|overwrite` | 已有 wrangler 配置时的合并策略 |
+| `--skip-domain-bind` | 跳过域名绑定（自行在 wrangler routes 配置） |
+| `--rotate-secret` | 强制更新 `SESSION_SECRET` |
+| `--allow-worker-overwrite` | 允许覆盖已绑定其他域名的 Worker |
+
+---
+
 Three ways to deploy — pick one:
 
 | Method | Best for |
 |--------|----------|
 | **[Deploy to Cloudflare](#deploy-to-cloudflare-badge)** badge + provision script | Fork on GitHub, CI deploy via Workers Builds |
-| **Bootstrap script** (`deploy-cloudflare.sh`) | One-shot local deploy to your domain |
+| **Bootstrap script** (`full-deploy-cloudflare.sh`) | One-shot local deploy — **只传 auth 域名** |
 | **Manual** | Existing checkout, full control |
 
 ### Deploy to Cloudflare badge
@@ -226,7 +300,7 @@ cd pauth
 # Resources only — no build/deploy
 curl -fsSL https://raw.githubusercontent.com/kennysoul/pauth/main/scripts/provision-cloudflare.sh -o provision.sh
 chmod +x provision.sh
-./provision.sh --dir . --skip-clone --zone kass.cc --auth-host auth.kass.cc --yes
+./provision.sh --dir . --skip-clone --yes auth.kass.cc
 ```
 
 This creates D1 + KV, writes `wrangler.jsonc`, `wrangler.production.jsonc`, `wrangler.local.jsonc`, and `.dev.vars`.
@@ -248,7 +322,7 @@ Workers Builds will run migrate + deploy on push.
 After the first successful Build, bind the auth hostname and upload the secret if not done in Dashboard:
 
 ```bash
-./scripts/deploy-cloudflare.sh --dir . --skip-clone --zone kass.cc --auth-host auth.kass.cc --yes --config-policy keep
+./scripts/deploy-cloudflare.sh --dir . --skip-clone --yes auth.kass.cc --config-policy keep
 ```
 
 (`--config-policy keep` skips rewriting wrangler files; script uploads `SESSION_SECRET`, runs migrate, deploy, and binds `AUTH_HOST`.)
@@ -261,42 +335,46 @@ Visit `https://auth.kass.cc/setup` and register the **root** admin Passkey.
 
 One-shot local deploy (D1/KV, config, build, migrate, deploy, domain bind). **Self-contained single file** — helpers embedded; clones repo automatically.
 
+**推荐：只传认证域名**
+
 ```bash
-# Download only this script (e.g. to ~/Downloads), then run:
 curl -fsSL https://raw.githubusercontent.com/kennysoul/pauth/main/scripts/full-deploy-cloudflare.sh -o full-deploy.sh
 chmod +x full-deploy.sh
 npx wrangler login
-./full-deploy.sh --zone kass.cc --auth-host auth.kass.cc --yes
+./full-deploy.sh --yes auth.kass.cc
 
 # From repo checkout:
-npm run deploy:full
-./scripts/full-deploy-cloudflare.sh --zone kass.cc --auth-host auth.kass.cc --yes
+npm run deploy:full -- --yes auth.kass.cc
+./scripts/full-deploy-cloudflare.sh --yes auth.kass.cc
 ```
 
 Split scripts (badge / CI): `provision-cloudflare.sh` + `deploy-cloudflare.sh` — see [Deploy to Cloudflare badge](#deploy-to-cloudflare-badge).
 
-**Single-file download** (split `deploy-cloudflare.sh`; fetches `deploy-common.sh` if needed):
+**Single-file download** (`deploy-cloudflare.sh`; fetches `deploy-common.sh` if needed):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kennysoul/pauth/main/scripts/deploy-cloudflare.sh -o bootstrap-pauth.sh
 chmod +x bootstrap-pauth.sh
 npx wrangler login
-./bootstrap-pauth.sh --zone kass.cc --auth-host auth.kass.cc --yes
+./bootstrap-pauth.sh --yes auth.kass.cc
 ```
 
-**From repo (full local):**
+**高级用法（可选参数）**
 
 ```bash
-npm run deploy:full
-
 # Git mode — also generate wrangler.production.jsonc for Builds
-./scripts/full-deploy-cloudflare.sh --zone kass.cc --deploy-mode git --config-policy merge-bindings --yes
+./scripts/full-deploy-cloudflare.sh --yes auth.kass.cc --deploy-mode git
 
-# Upgrade — keep existing wrangler config unchanged
-./scripts/full-deploy-cloudflare.sh --dir ~/pauth --skip-clone --config-policy keep --yes
+# 自定义 zone / Worker 名 / 安装目录
+./scripts/full-deploy-cloudflare.sh --yes auth.kass.cc \
+  --zone kass.cc --worker-name passkey-auth --dir ~/pauth-kass
+
+# 升级已有 checkout（保留 wrangler 配置）
+./scripts/full-deploy-cloudflare.sh --yes auth.kass.cc \
+  --dir ~/pauth-auth-kass-cc --skip-clone --config-policy keep
 ```
 
-Still required: Node.js 20+, git, python3, curl, and Cloudflare auth.
+Still required: Node.js 20+, git, python3, curl, and Cloudflare auth (`npx wrangler login` or `CLOUDFLARE_API_TOKEN`).
 
 **Wrangler config files**
 

@@ -19,7 +19,7 @@ API_BASE = "https://api.cloudflare.com/client/v4"
 DNS_BLOCKING_TYPES = frozenset({"A", "AAAA", "CNAME"})
 
 
-def load_api_token() -> str:
+def try_load_api_token() -> str | None:
     token = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
     if token:
         return token
@@ -29,6 +29,7 @@ def load_api_token() -> str:
         home / "config" / "default.toml",
         Path.home() / ".config" / "wrangler" / "config" / "default.toml",
         Path.home() / ".config" / ".wrangler" / "config" / "default.toml",
+        Path.home() / "Library" / "Application Support" / ".wrangler" / "config" / "default.toml",
     ]
     for path in config_paths:
         if not path.exists():
@@ -38,7 +39,57 @@ def load_api_token() -> str:
             m = re.search(rf'^{key}\s*=\s*"([^"]+)"', text, re.MULTILINE)
             if m and m.group(1):
                 return m.group(1)
+    return None
+
+
+def load_api_token() -> str:
+    token = try_load_api_token()
+    if token:
+        return token
     die("需要 CLOUDFLARE_API_TOKEN 或已执行 wrangler login")
+
+
+def has_api_token() -> bool:
+    return try_load_api_token() is not None
+
+
+def wrangler_logged_in(cwd: str | None = None) -> bool:
+    workdir = cwd or os.environ.get("PAUTH_INSTALL_DIR") or os.getcwd()
+    try:
+        result = subprocess.run(
+            ["npx", "wrangler", "whoami"],
+            cwd=workdir,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    output = f"{result.stdout}\n{result.stderr}".lower()
+    if result.returncode != 0:
+        return False
+    if "not authenticated" in output or "please run `wrangler login`" in output:
+        return False
+    return "logged in" in output or "you are logged in" in output
+
+
+def run_preflight_oauth_fallback(args: argparse.Namespace) -> int:
+    hostname = args.hostname.strip().lower()
+    zone_name = args.zone_name.strip().lower()
+    if not hostname_in_zone(hostname, zone_name):
+        die(f"{hostname} 不是 {zone_name} 下的域名")
+
+    cwd = os.environ.get("PAUTH_INSTALL_DIR") or os.getcwd()
+    if not wrangler_logged_in(cwd):
+        die("需要 CLOUDFLARE_API_TOKEN 或已执行 wrangler login")
+
+    print("WARN preflight_oauth_only: REST API 细检已跳过（OAuth 登录无法供 bind-custom-domain.py 直接读取 token）")
+    print("WARN domain_bind: 将保留 wrangler routes，由 wrangler deploy 绑定自定义域名")
+    print(f"OK oauth_wrangler hostname={hostname} worker={args.worker_name}")
+    if args.skip_domain_bind:
+        print("SKIP domain_bind (--skip-domain-bind)")
+    return 0
 
 
 def die(msg: str, code: int = 1) -> None:
@@ -137,6 +188,140 @@ def hostname_in_zone(hostname: str, zone_name: str) -> bool:
     return hostname == zone_name or hostname.endswith("." + zone_name)
 
 
+def slugify_hostname(value: str) -> str:
+    value = value.strip().lower()
+    value = re.sub(r"[^a-z0-9]+", "-", value)
+    return value.strip("-")
+
+
+def derive_zone_name(hostname: str) -> str:
+    hostname = hostname.strip().lower().rstrip(".")
+    parts = hostname.split(".")
+    if len(parts) < 2:
+        die(f"无效认证域名: {hostname}（至少需要形如 auth.example.com）")
+    if len(parts) == 2:
+        return hostname
+    return ".".join(parts[1:])
+
+
+def strip_jsonc(text: str) -> str:
+    out: list[str] = []
+    i = 0
+    in_string = False
+    escape = False
+    while i < len(text):
+        ch = text[i]
+        if in_string:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "/" and i + 1 < len(text) and text[i + 1] == "/":
+            while i < len(text) and text[i] not in "\n":
+                i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def read_wrangler_jsonc(path: Path) -> dict[str, Any]:
+    return json.loads(strip_jsonc(path.read_text(encoding="utf-8")))
+
+
+def apply_config_bindings(out: dict[str, Any], cfg: dict[str, Any]) -> None:
+    if cfg.get("name"):
+        out["worker_name"] = str(cfg["name"])
+    d1 = (cfg.get("d1_databases") or [{}])[0]
+    if d1.get("database_name"):
+        out["d1_name"] = str(d1["database_name"])
+    if d1.get("database_id"):
+        out["d1_id"] = str(d1["database_id"])
+    kv = (cfg.get("kv_namespaces") or [{}])[0]
+    if kv.get("title"):
+        out["kv_title"] = str(kv["title"])
+    if kv.get("id"):
+        out["kv_id"] = str(kv["id"])
+    if kv.get("preview_id"):
+        out["kv_preview_id"] = str(kv["preview_id"])
+
+
+def apply_worker_bindings(out: dict[str, Any], token: str, account_id: str, worker_name: str) -> None:
+    data = api_request(
+        token,
+        "GET",
+        f"/accounts/{account_id}/workers/scripts/{urllib.parse.quote(worker_name, safe='')}/bindings",
+        allow_failure=True,
+    )
+    if not data or not data.get("success"):
+        return
+    for row in data.get("result") or []:
+        btype = (row.get("type") or "").lower()
+        if btype in {"d1", "d1_database", "d1database"}:
+            if row.get("database_name"):
+                out["d1_name"] = str(row["database_name"])
+            if row.get("id"):
+                out["d1_id"] = str(row["id"])
+        if btype in {"kv_namespace", "kv"}:
+            if row.get("namespace_id"):
+                out["kv_id"] = str(row["namespace_id"])
+            if row.get("title"):
+                out["kv_title"] = str(row["title"])
+
+
+def run_resolve(args: argparse.Namespace) -> int:
+    hostname = args.hostname.strip().lower().rstrip(".")
+    zone_name = (args.zone_name or derive_zone_name(hostname)).strip().lower()
+    if not hostname_in_zone(hostname, zone_name):
+        die(f"{hostname} 不是 {zone_name} 下的域名")
+
+    host_slug = slugify_hostname(hostname)
+    out: dict[str, Any] = {
+        "auth_host": hostname,
+        "zone_name": zone_name,
+        "host_slug": host_slug,
+        "worker_name": f"pauth-{host_slug}",
+        "d1_name": f"pauth-{host_slug}-db",
+        "kv_title": f"CHALLENGES-pauth-{host_slug}",
+        "mode": "create",
+    }
+
+    config_path = (args.config_path or "").strip()
+    if config_path:
+        path = Path(config_path)
+        if path.exists():
+            cfg = read_wrangler_jsonc(path)
+            cfg_auth = str((cfg.get("vars") or {}).get("AUTH_HOST") or "").lower()
+            if cfg_auth == hostname:
+                out["mode"] = "upgrade"
+                apply_config_bindings(out, cfg)
+
+    if has_api_token():
+        try:
+            token = load_api_token()
+            account_id = get_account_id(token)
+            workers = find_workers_bound_to_hostname(token, account_id, hostname)
+            if workers:
+                out["worker_name"] = workers[0]
+                out["mode"] = "upgrade"
+                apply_worker_bindings(out, token, account_id, workers[0])
+        except SystemExit:
+            pass
+
+    print(json.dumps(out, ensure_ascii=False))
+    return 0
+
+
 def list_dns_records(token: str, zone_id: str, hostname: str) -> list[dict[str, Any]]:
     q = urllib.parse.urlencode({"name": hostname, "per_page": 100})
     data = api_request(token, "GET", f"/zones/{zone_id}/dns_records?{q}")
@@ -172,7 +357,16 @@ def check_dns_conflicts(token: str, zone_id: str, hostname: str) -> list[str]:
 
 def list_worker_script_names(token: str, account_id: str) -> list[str]:
     data = api_request(token, "GET", f"/accounts/{account_id}/workers/scripts")
-    return list((data or {}).get("result") or [])
+    result = (data or {}).get("result") or []
+    names: list[str] = []
+    for row in result:
+        if isinstance(row, str):
+            names.append(row)
+        elif isinstance(row, dict):
+            script_id = row.get("id") or row.get("name")
+            if script_id:
+                names.append(str(script_id))
+    return names
 
 
 def list_worker_custom_domains(token: str, account_id: str, worker_name: str) -> list[str]:
@@ -257,6 +451,9 @@ def check_worker_collision(
 
 
 def run_preflight(args: argparse.Namespace) -> int:
+    if not has_api_token():
+        return run_preflight_oauth_fallback(args)
+
     hostname = args.hostname.strip().lower()
     zone_name = args.zone_name.strip().lower()
     if not hostname_in_zone(hostname, zone_name):
@@ -327,8 +524,10 @@ def bind_custom_domain(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Bind auth hostname to pauth Worker")
     parser.add_argument("--hostname", required=True, help="e.g. auth.kass.cc")
-    parser.add_argument("--zone-name", required=True, help="e.g. kass.cc")
+    parser.add_argument("--zone-name", help="e.g. kass.cc (optional; derived from --hostname when omitted)")
     parser.add_argument("--worker-name", default="passkey-auth")
+    parser.add_argument("--config-path", help="Existing wrangler.local.jsonc for upgrade detection")
+    parser.add_argument("--resolve", action="store_true", help="Print JSON deployment plan for auth hostname")
     parser.add_argument("--verify-only", action="store_true")
     parser.add_argument("--preflight", action="store_true", help="Full pre-deploy checks")
     parser.add_argument("--skip-domain-bind", action="store_true")
@@ -337,7 +536,24 @@ def main() -> int:
         action="store_true",
         help="Allow deploying to a Worker already bound to another hostname",
     )
+    parser.add_argument(
+        "--has-token",
+        action="store_true",
+        help="Exit 0 when CLOUDFLARE_API_TOKEN or wrangler config token is available",
+    )
     args = parser.parse_args()
+
+    if args.resolve:
+        return run_resolve(args)
+
+    if not args.zone_name:
+        args.zone_name = derive_zone_name(args.hostname)
+
+    if args.has_token:
+        if has_api_token():
+            print("OK has_token")
+            return 0
+        die("no token")
 
     if args.preflight:
         return run_preflight(args)
@@ -346,6 +562,13 @@ def main() -> int:
     zone_name = args.zone_name.strip().lower()
     if not hostname_in_zone(hostname, zone_name):
         die(f"{hostname} 不是 {zone_name} 下的域名")
+
+    if not has_api_token():
+        die(
+            "OAuth 模式下无法通过 REST API 绑定域名。\n"
+            "请保留 wrangler.jsonc 中的 routes（custom_domain: true），由 wrangler deploy 完成绑定；\n"
+            "或设置 CLOUDFLARE_API_TOKEN 后重试。"
+        )
 
     token = load_api_token()
     account_id = get_account_id(token)

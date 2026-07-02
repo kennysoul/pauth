@@ -3,8 +3,8 @@
 # Use after [Deploy to Cloudflare] badge: Workers Builds handles build + deploy.
 #
 # Examples:
-#   ./scripts/provision-cloudflare.sh --zone kass.cc --auth-host auth.kass.cc --yes
-#   ./scripts/provision-cloudflare.sh --dir . --skip-clone --zone kass.cc --yes
+#   ./scripts/provision-cloudflare.sh --yes auth.kass.cc
+#   ./scripts/provision-cloudflare.sh --dir . --skip-clone --yes auth.kass.cc
 #
 # Self-contained: if scripts/lib/deploy-common.sh is missing, fetches it from GitHub.
 
@@ -33,15 +33,21 @@ pauth_load_common() {
 
 provision_usage() {
   cat <<'EOF'
-Usage: provision-cloudflare.sh [options]
+Usage: provision-cloudflare.sh [options] [auth-host]
 
 Provision D1 + KV and write wrangler configs for pauth (no build/deploy).
 Pair with Deploy to Cloudflare badge + Workers Builds (npm run deploy:workers).
 
+常规用法:
+  ./provision-cloudflare.sh --yes auth.kass.cc
+
 Options:
-  --zone DOMAIN           Apex zone on Cloudflare (required with --yes)
-  --auth-host HOST        Auth hostname (default: auth.<zone>)
-  --dir PATH              Project directory (default: ~/pauth)
+  --auth-host HOST        认证域名（必填，或作为 positional 参数）
+  --zone DOMAIN           根域名（可选；默认从 auth-host 推导）
+  --dir PATH              项目目录（默认 ~/pauth-<auth-host-slug>）
+  --worker-name NAME      Worker 名称（默认 pauth-<auth-host-slug>）
+  --d1-name NAME          D1 名称（默认 pauth-<auth-host-slug>-db）
+  --kv-title TITLE        KV 标题（默认 CHALLENGES-pauth-<auth-host-slug>）
   --skip-clone            Use existing checkout in --dir
   --deploy-mode MODE      git (default) | local
   --config-policy POLICY  keep | merge-bindings | overwrite
