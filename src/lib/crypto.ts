@@ -19,8 +19,15 @@ export function newIdToken(): string {
   return `id_${crypto.randomUUID().replace(/-/g, '')}`;
 }
 
-export function appendQuery(base: string, params: Record<string, string>): string {
-  const url = new URL(base);
+export function appendQuery(
+  base: string,
+  params: Record<string, string>,
+  origin?: string,
+): string {
+  const url =
+    base.startsWith('http://') || base.startsWith('https://')
+      ? new URL(base)
+      : new URL(base, origin);
   for (const [key, value] of Object.entries(params)) {
     url.searchParams.set(key, value);
   }

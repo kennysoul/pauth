@@ -28,12 +28,19 @@ import { appendCookies, createSession, resolveNormalSession } from '../lib/sessi
 
 export const oauthRoutes = new Hono<{ Bindings: Env; Variables: AuthContext }>();
 
+function appOrigin(c: Context): string {
+  return c.env.ORIGIN || new URL(c.req.url).origin;
+}
+
 function redirectWithError(c: Context, target: string, message: string) {
-  return c.redirect(appendQuery(target, { oauth_error: message.slice(0, 180) }), 302);
+  return c.redirect(
+    appendQuery(target, { oauth_error: message.slice(0, 180) }, appOrigin(c)),
+    302,
+  );
 }
 
 function redirectWithSuccess(c: Context, target: string, params: Record<string, string>) {
-  return c.redirect(appendQuery(target, params), 302);
+  return c.redirect(appendQuery(target, params, appOrigin(c)), 302);
 }
 
 async function finishLogin(c: Context, userId: string, nextPath: string) {
@@ -207,7 +214,11 @@ async function authorizeBindStart(
   const resolved = await resolveNormalSession(c);
   if (!resolved) {
     return c.redirect(
-      appendQuery('/login', { oauth_error: `请先登录后再关联 ${providerLabel} 账号` }),
+      appendQuery(
+        '/login',
+        { oauth_error: `请先登录后再关联 ${providerLabel} 账号` },
+        appOrigin(c),
+      ),
       302,
     );
   }
