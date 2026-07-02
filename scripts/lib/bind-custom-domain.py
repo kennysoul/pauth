@@ -26,6 +26,7 @@ def load_api_token() -> str:
     home = Path(os.environ.get("WRANGLER_HOME", Path.home() / ".wrangler"))
     config_paths = [
         home / "config" / "default.toml",
+        Path.home() / ".config" / "wrangler" / "config" / "default.toml",
         Path.home() / ".config" / ".wrangler" / "config" / "default.toml",
     ]
     for path in config_paths:

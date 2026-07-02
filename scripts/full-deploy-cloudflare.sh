@@ -1,24 +1,23 @@
 #!/usr/bin/env bash
-# Full local bootstrap: D1 + KV + wrangler config + build + migrate + deploy + domain bind.
+# pauth · Cloudflare 一键部署（单文件）
 #
-# Self-contained: download this file alone and run (Python helpers embedded).
-# From repo checkout: prefers scripts/lib/*.py when present.
+# 执行顺序：
+#   预检 1/3  本机工具（node / git / curl …）
+#   预检 2/3  Cloudflare 登录与 API 权限
+#   预检 3/3  GitHub 仓库 + lib helper 可下载到临时目录
+#   全部通过后才开始 clone / D1 / KV / 部署
 #
-# Prerequisites:
-#   - Node.js 20+, git, python3
-#   - wrangler auth: `npx wrangler login` OR CLOUDFLARE_API_TOKEN
+# 单文件下载即可运行；Python helper 在预检阶段从 GitHub 拉到临时目录。
 #
-# Examples:
-#   curl -fsSL .../full-deploy-cloudflare.sh -o full-deploy.sh && chmod +x full-deploy.sh
+#   curl -fsSL https://raw.githubusercontent.com/kennysoul/pauth/main/scripts/full-deploy-cloudflare.sh -o full-deploy.sh
+#   chmod +x full-deploy.sh
+#   export CLOUDFLARE_API_TOKEN=...
 #   ./full-deploy.sh --zone kass.cc --auth-host auth.kass.cc --yes
-#   npm run deploy:full
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HELPER_DIR=""
-CONFIG_PY=""
-BIND_DOMAIN_PY=""
+# ── 默认配置 ──────────────────────────────────────────────────────────────────
+
 DEFAULT_REPO="https://github.com/kennysoul/pauth.git"
 DEFAULT_BRANCH="main"
 DEFAULT_INSTALL_DIR="${HOME}/pauth"
@@ -48,430 +47,132 @@ ROTATE_SECRET=0
 GIT_FIRST_DEPLOY=0
 SKIP_DOMAIN_BIND=0
 
+HELPER_DIR=""
+CONFIG_PY=""
+BIND_DOMAIN_PY=""
+WRANGLER_WHOAMI=""
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-info() { printf '%b\n' "${GREEN}→${NC} $*"; }
-warn() { printf '%b\n' "${YELLOW}!${NC} $*"; }
-die() { printf '%b\n' "${RED}✗${NC} $*" >&2; exit 1; }
+# ── 输出 ──────────────────────────────────────────────────────────────────────
+
+info()  { printf '%b\n' "${GREEN}→${NC} $*"; }
+warn()  { printf '%b\n' "${YELLOW}!${NC} $*"; }
+die()   { printf '%b\n' "${RED}✗${NC} $*" >&2; exit 1; }
+ok()    { printf '%b\n' "${GREEN}✓${NC} $*"; }
+phase() { printf '\n%b\n' "${CYAN}── $* ──${NC}"; }
 
 usage() {
   cat <<'EOF'
 Usage: full-deploy-cloudflare.sh [options]
 
-Full local bootstrap: D1 + KV + wrangler config + build + deploy + domain bind.
+单文件 Cloudflare 全量部署。预检通过后才执行 clone / D1 / KV / build / deploy。
 
-Self-contained — single file download OK; clones pauth repo automatically.
+预检顺序：本机工具 → Cloudflare 权限 → GitHub 可达 + lib 下载
 
 Options:
-  --repo URL              GitHub repo
-  --branch NAME           Git branch (default: main)
-  --dir PATH              Install directory (default: ~/pauth)
-  --zone DOMAIN           Apex zone on Cloudflare (required with --yes)
-  --auth-host HOST        Auth hostname (default: auth.<zone>)
-  --rp-name NAME          RP_NAME (default: Kass Auth)
-  --worker-name NAME      Worker name (default: passkey-auth)
-  --d1-name NAME          D1 database name
-  --kv-title TITLE        KV namespace title
-  --db-location LOC       D1 location hint (default: apac)
-  --session-secret STR    SESSION_SECRET (auto-generated if empty)
-  --deploy-mode MODE      local | git  (local = wrangler deploy now)
+  --repo URL              GitHub 仓库（默认 kennysoul/pauth）
+  --branch NAME           分支（默认 main）
+  --dir PATH              安装目录（默认 ~/pauth）
+  --zone DOMAIN           根域名，Cloudflare 托管（--yes 时必填）
+  --auth-host HOST        认证域名（默认 auth.<zone>）
+  --rp-name NAME          Passkey 显示名
+  --worker-name NAME      Worker 名称
+  --d1-name NAME          D1 数据库名
+  --kv-title TITLE        KV namespace 标题
+  --db-location LOC       D1 区域（默认 apac）
+  --session-secret STR    SESSION_SECRET（留空自动生成）
+  --deploy-mode MODE      local | git
   --config-policy POLICY  keep | merge-bindings | overwrite
-                          (when wrangler config already exists)
-  --rotate-secret         Update SESSION_SECRET even if .dev.vars exists
-  --git-first-deploy      Git mode: also run one local wrangler deploy now
-  --skip-domain-bind      Do not attach AUTH_HOST to Worker automatically
-  --skip-clone            Use existing checkout in --dir
-  --yes, -y               Non-interactive
+  --rotate-secret         强制更新 .dev.vars 中的 SESSION_SECRET
+  --git-first-deploy      Git 模式下额外执行一次本地 deploy
+  --skip-domain-bind      跳过自定义域名绑定
+  --skip-clone            使用 --dir 已有 checkout
+  --yes, -y               非交互
   -h, --help
 
-Config files (written in install dir):
-  wrangler.local.jsonc      Local deploy / wrangler dev (gitignored)
-  wrangler.production.jsonc Cloudflare Git Builds (commit to private repo)
+环境变量：
+  CLOUDFLARE_API_TOKEN      推荐：User/Account API Token
+  CLOUDFLARE_ACCOUNT_ID     可选；未设时从 wrangler whoami 解析
 
-If wrangler.local.jsonc already exists, interactive mode asks:
-  1 keep  2 merge-bindings (sync D1/KV IDs only)  3 overwrite
-
-Custom domain: verifies AUTH_HOST is under your Cloudflare zone, then binds it
-to the Worker (overrides existing Worker/DNS on that hostname). --skip-domain-bind
+示例：
+  ./full-deploy.sh --zone kass.cc --auth-host auth.kass.cc --yes --config-policy keep
 EOF
 }
 
-ensure_helpers() {
-  if [[ -f "$SCRIPT_DIR/lib/wrangler-config.py" && -f "$SCRIPT_DIR/lib/bind-custom-domain.py" ]]; then
-    CONFIG_PY="$SCRIPT_DIR/lib/wrangler-config.py"
-    BIND_DOMAIN_PY="$SCRIPT_DIR/lib/bind-custom-domain.py"
-    return
-  fi
-
-  HELPER_DIR="${TMPDIR:-/tmp}/pauth-deploy-$$"
-  mkdir -p "$HELPER_DIR/lib"
-
-  cat >"$HELPER_DIR/lib/wrangler-config.py" <<'PY'
-#!/usr/bin/env python3
-"""Merge or write wrangler JSONC configs for deploy-cloudflare.sh."""
-from __future__ import annotations
-
-import argparse
-import json
-import re
-import sys
-from pathlib import Path
-from typing import Any
-
-
-def load_jsonc(path: Path) -> dict[str, Any]:
-    text = path.read_text(encoding="utf-8")
-    lines = [re.sub(r"//.*$", "", line) for line in text.splitlines()]
-    return json.loads("\n".join(lines))
-
-
-def dump_jsonc(data: dict[str, Any]) -> str:
-    return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
-
-
-def build_desired(args: argparse.Namespace) -> dict[str, Any]:
-    return {
-        "$schema": "node_modules/wrangler/config-schema.json",
-        "name": args.worker_name,
-        "main": "src/index.ts",
-        "compatibility_date": "2025-06-05",
-        "compatibility_flags": ["nodejs_compat"],
-        "vars": {
-            "RP_ID": args.rp_id,
-            "RP_NAME": args.rp_name,
-            "ORIGIN": args.origin,
-            "COOKIE_DOMAIN": args.cookie_domain,
-            "AUTH_HOST": args.auth_host,
-            "SESSION_TTL_SECONDS": "604800",
-            "SETUP_TTL_SECONDS": "600",
-        },
-        "assets": {
-            "directory": "./dist",
-            "binding": "ASSETS",
-            "not_found_handling": "single-page-application",
-            "run_worker_first": True,
-        },
-        "d1_databases": [
-            {
-                "binding": "DB",
-                "database_name": args.d1_name,
-                "database_id": args.d1_id,
-                "migrations_dir": "migrations",
-            }
-        ],
-        "kv_namespaces": [
-            {
-                "binding": "CHALLENGES",
-                "id": args.kv_id,
-                "preview_id": args.kv_preview_id,
-            }
-        ],
-        "routes": [
-            {
-                "pattern": args.auth_host,
-                "zone_name": args.zone_name,
-                "custom_domain": True,
-            }
-        ],
-        "observability": {"enabled": True},
-    }
-
-
-def diff_summary(existing: dict[str, Any], desired: dict[str, Any]) -> list[str]:
-    lines: list[str] = []
-
-    def var(key: str) -> str:
-        return str((existing.get("vars") or {}).get(key, ""))
-
-    def dvar(key: str) -> str:
-        return str((desired.get("vars") or {}).get(key, ""))
-
-    for key in ("RP_ID", "RP_NAME", "ORIGIN", "COOKIE_DOMAIN", "AUTH_HOST"):
-        if var(key) != dvar(key):
-            lines.append(f"vars.{key}: {var(key) or '(空)'} → {dvar(key)}")
-
-    ex_d1 = ((existing.get("d1_databases") or [{}])[0]).get("database_id", "")
-    de_d1 = ((desired.get("d1_databases") or [{}])[0]).get("database_id", "")
-    if ex_d1 != de_d1:
-        lines.append(f"d1.database_id: {ex_d1 or '(空)'} → {de_d1}")
-
-    ex_kv = ((existing.get("kv_namespaces") or [{}])[0]).get("id", "")
-    de_kv = ((desired.get("kv_namespaces") or [{}])[0]).get("id", "")
-    if ex_kv != de_kv:
-        lines.append(f"kv.id: {ex_kv or '(空)'} → {de_kv}")
-
-    ex_prev = ((existing.get("kv_namespaces") or [{}])[0]).get("preview_id", "")
-    de_prev = ((desired.get("kv_namespaces") or [{}])[0]).get("preview_id", "")
-    if ex_prev != de_prev:
-        lines.append(f"kv.preview_id: {ex_prev or '(空)'} → {de_prev}")
-
-    ex_route = ((existing.get("routes") or [{}])[0]).get("pattern", "")
-    de_route = ((desired.get("routes") or [{}])[0]).get("pattern", "")
-    if ex_route != de_route:
-        lines.append(f"routes.pattern: {ex_route or '(空)'} → {de_route}")
-
-    if existing.get("name") != desired.get("name"):
-        lines.append(f"name: {existing.get('name')} → {desired.get('name')}")
-
-    return lines
-
-
-def merge_config(existing: dict[str, Any], desired: dict[str, Any]) -> dict[str, Any]:
-    merged = json.loads(json.dumps(existing))
-    merged["d1_databases"] = desired["d1_databases"]
-    merged["kv_namespaces"] = desired["kv_namespaces"]
-    for key in ("$schema", "main", "compatibility_date", "compatibility_flags", "assets", "observability"):
-        if key in desired:
-            merged[key] = desired[key]
-    return merged
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--target", required=True)
-    parser.add_argument("--policy", choices=("keep", "merge-bindings", "overwrite"), required=True)
-    parser.add_argument("--worker-name", required=True)
-    parser.add_argument("--zone-name", required=True)
-    parser.add_argument("--auth-host", required=True)
-    parser.add_argument("--rp-id", required=True)
-    parser.add_argument("--rp-name", required=True)
-    parser.add_argument("--origin", required=True)
-    parser.add_argument("--cookie-domain", required=True)
-    parser.add_argument("--d1-name", required=True)
-    parser.add_argument("--d1-id", required=True)
-    parser.add_argument("--kv-id", required=True)
-    parser.add_argument("--kv-preview-id", required=True)
-    parser.add_argument("--diff-only", action="store_true")
-    args = parser.parse_args()
-
-    target = Path(args.target)
-    desired = build_desired(args)
-
-    if not target.exists():
-        if args.diff_only:
-            print("NEW")
-            return 0
-        target.write_text(dump_jsonc(desired), encoding="utf-8")
-        print("CREATED")
-        return 0
-
-    existing = load_jsonc(target)
-    changes = diff_summary(existing, desired)
-
-    if args.diff_only:
-        if not changes:
-            print("SAME")
-        else:
-            print("\n".join(changes))
-        return 0
-
-    if args.policy == "keep":
-        print("KEPT")
-        return 0
-
-    if args.policy == "merge-bindings":
-        merged = merge_config(existing, desired)
-        target.write_text(dump_jsonc(merged), encoding="utf-8")
-        print("MERGED")
-        return 0
-
-    target.write_text(dump_jsonc(desired), encoding="utf-8")
-    print("OVERWRITTEN")
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
-PY
-
-  cat >"$HELPER_DIR/lib/bind-custom-domain.py" <<'PY'
-#!/usr/bin/env python3
-"""Verify Cloudflare zone ownership and force-bind a Worker custom domain."""
-from __future__ import annotations
-
-import argparse
-import json
-import os
-import re
-import subprocess
-import sys
-import urllib.error
-import urllib.parse
-import urllib.request
-from pathlib import Path
-from typing import Any
-
-
-API_BASE = "https://api.cloudflare.com/client/v4"
-
-
-def load_api_token() -> str:
-    token = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
-    if token:
-        return token
-
-    home = Path(os.environ.get("WRANGLER_HOME", Path.home() / ".wrangler"))
-    config_paths = [
-        home / "config" / "default.toml",
-        Path.home() / ".config" / ".wrangler" / "config" / "default.toml",
-    ]
-    for path in config_paths:
-        if not path.exists():
-            continue
-        text = path.read_text(encoding="utf-8")
-        for key in ("api_token", "oauth_token"):
-            m = re.search(rf'^{key}\s*=\s*"([^"]+)"', text, re.MULTILINE)
-            if m and m.group(1):
-                return m.group(1)
-    die("需要 CLOUDFLARE_API_TOKEN 或已执行 wrangler login")
-
-
-def die(msg: str) -> None:
-    print(f"ERROR: {msg}", file=sys.stderr)
-    sys.exit(1)
-
-
-def api_request(
-    token: str,
-    method: str,
-    path: str,
-    body: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    url = f"{API_BASE}{path}"
-    data = None if body is None else json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=data,
-        method=method,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", errors="replace")
-        try:
-            parsed = json.loads(detail)
-            msgs = parsed.get("errors") or []
-            if msgs:
-                die(msgs[0].get("message") or detail)
-        except json.JSONDecodeError:
-            pass
-        die(f"HTTP {e.code}: {detail[:400]}")
-    except urllib.error.URLError as e:
-        die(str(e))
-
-    if not payload.get("success"):
-        errs = payload.get("errors") or []
-        if errs:
-            die(errs[0].get("message") or json.dumps(errs))
-        die(json.dumps(payload))
-    return payload
-
-
-def get_account_id(token: str) -> str:
-    env_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
-    if env_id:
-        return env_id
-
-    proc = subprocess.run(
-        ["npx", "wrangler", "whoami"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    out = proc.stdout + proc.stderr
-    m = re.search(r"Account ID[:\s]+([0-9a-f]{32})", out, re.I)
-    if m:
-        return m.group(1)
-
-    data = api_request(token, "GET", "/accounts?per_page=50")
-    results = data.get("result") or []
-    if not results:
-        die("无法获取 Cloudflare Account ID")
-    if len(results) == 1:
-        return results[0]["id"]
-    die("多个 Cloudflare 账户，请设置 CLOUDFLARE_ACCOUNT_ID")
-
-
-def find_zone(token: str, zone_name: str) -> dict[str, Any]:
-    path = f"/zones?name={urllib.parse.quote(zone_name)}&status=active&per_page=1"
-    data = api_request(token, "GET", path)
-    zones = data.get("result") or []
-    if not zones:
-        die(f"域名 {zone_name} 不在当前 Cloudflare 账户中（或 zone 未激活）")
-    zone = zones[0]
-    if zone.get("name") != zone_name:
-        die(f"Zone 匹配异常: 期望 {zone_name}，得到 {zone.get('name')}")
-    return zone
-
-
-def hostname_in_zone(hostname: str, zone_name: str) -> bool:
-    return hostname == zone_name or hostname.endswith("." + zone_name)
-
-
-def bind_custom_domain(
-    token: str,
-    account_id: str,
-    worker_name: str,
-    hostname: str,
-    zone_id: str,
-    zone_name: str,
-) -> None:
-    worker_url = f"/accounts/{account_id}/workers/scripts/{worker_name}"
-    origins = [{"hostname": hostname, "zone_id": zone_id, "zone_name": zone_name}]
-    body = {
-        "override_scope": True,
-        "override_existing_origin": True,
-        "override_existing_dns_record": True,
-        "origins": origins,
-    }
-    api_request(token, "PUT", f"{worker_url}/domains/records", body)
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Bind auth hostname to pauth Worker")
-    parser.add_argument("--hostname", required=True, help="e.g. auth.kass.cc")
-    parser.add_argument("--zone-name", required=True, help="e.g. kass.cc")
-    parser.add_argument("--worker-name", default="passkey-auth")
-    parser.add_argument("--verify-only", action="store_true")
-    args = parser.parse_args()
-
-    hostname = args.hostname.strip().lower()
-    zone_name = args.zone_name.strip().lower()
-    if not hostname_in_zone(hostname, zone_name):
-        die(f"{hostname} 不是 {zone_name} 下的域名")
-
-    token = load_api_token()
-    account_id = get_account_id(token)
-    zone = find_zone(token, zone_name)
-    zone_id = zone["id"]
-
-    if args.verify_only:
-        print(f"OK zone={zone_name} id={zone_id}")
-        return 0
-
-    bind_custom_domain(token, account_id, args.worker_name, hostname, zone_id, zone_name)
-    print(f"BOUND {hostname} -> {args.worker_name}")
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
-PY
-
-  chmod +x "$HELPER_DIR/lib/wrangler-config.py" "$HELPER_DIR/lib/bind-custom-domain.py"
-  CONFIG_PY="$HELPER_DIR/lib/wrangler-config.py"
-  BIND_DOMAIN_PY="$HELPER_DIR/lib/bind-custom-domain.py"
-  trap 'rm -rf "$HELPER_DIR"' EXIT
+cleanup_helpers() {
+  [[ -n "$HELPER_DIR" && -d "$HELPER_DIR" ]] && rm -rf "$HELPER_DIR"
 }
+
+# ── 参数 ──────────────────────────────────────────────────────────────────────
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --repo) REPO_URL="$2"; shift 2 ;;
+      --branch) GIT_BRANCH="$2"; shift 2 ;;
+      --dir) INSTALL_DIR="$2"; shift 2 ;;
+      --zone) ZONE_NAME="$2"; shift 2 ;;
+      --auth-host) AUTH_HOST="$2"; shift 2 ;;
+      --rp-name) RP_NAME="$2"; shift 2 ;;
+      --worker-name) WORKER_NAME="$2"; shift 2 ;;
+      --d1-name) D1_NAME="$2"; shift 2 ;;
+      --kv-title) KV_TITLE="$2"; shift 2 ;;
+      --db-location) DB_LOCATION="$2"; shift 2 ;;
+      --session-secret) SESSION_SECRET="$2"; shift 2 ;;
+      --deploy-mode) DEPLOY_MODE="$2"; shift 2 ;;
+      --config-policy) CONFIG_POLICY="$2"; shift 2 ;;
+      --rotate-secret) ROTATE_SECRET=1; shift ;;
+      --git-first-deploy) GIT_FIRST_DEPLOY=1; shift ;;
+      --skip-domain-bind) SKIP_DOMAIN_BIND=1; shift ;;
+      --skip-clone) SKIP_CLONE=1; shift ;;
+      --yes|-y) ASSUME_YES=1; NON_INTERACTIVE=1; shift ;;
+      -h|--help) usage; exit 0 ;;
+      *) die "未知参数: $1（用 --help 查看）" ;;
+    esac
+  done
+}
+
+github_raw_lib_base() {
+  local url="$1" branch="$2" owner="" repo=""
+  if [[ "$url" =~ github\.com[:/]+([^/]+)/([^/.]+)(\.git)?$ ]]; then
+    owner="${BASH_REMATCH[1]}"
+    repo="${BASH_REMATCH[2]}"
+    printf 'https://raw.githubusercontent.com/%s/%s/%s/scripts/lib' "$owner" "$repo" "$branch"
+  else
+    die "仅支持 GitHub 仓库 URL（当前: $url）"
+  fi
+}
+
+# ── 预检 1/3：本机工具 ───────────────────────────────────────────────────
+
+preflight_check_tools() {
+  phase "预检 1/3 · 本机工具"
+  local missing=()
+  for cmd in node npm npx git python3 curl; do
+    if command -v "$cmd" >/dev/null 2>&1; then
+      ok "$cmd"
+    else
+      missing+=("$cmd")
+    fi
+  done
+  [[ ${#missing[@]} -eq 0 ]] || die "缺少命令: ${missing[*]}"
+
+  local node_major
+  node_major="$(node -p "process.versions.node.split('.')[0]")"
+  [[ "$node_major" -ge 20 ]] || die "需要 Node.js 20+（当前 $(node -v)）"
+  ok "Node.js $(node -v)"
+
+  if [[ -n "${NODE_EXTRA_CA_CERTS:-}" && ! -f "${NODE_EXTRA_CA_CERTS}" ]]; then
+    warn "NODE_EXTRA_CA_CERTS 指向不存在的文件，Wrangler 可能报警（可 unset NODE_EXTRA_CA_CERTS）"
+  fi
+}
+
+# ── 交互配置（预检 2 之前需已知 zone）────────────────────────────────────────
 
 prompt() {
   local var_name="$1" question="$2" default="${3:-}" value=""
@@ -489,6 +190,214 @@ confirm() {
   read -r -p "$1 [y/N]: " ans
   [[ "$ans" =~ ^[Yy]$ ]]
 }
+
+collect_config() {
+  if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+    [[ -n "$ZONE_NAME" ]] || die "--yes 需要 --zone <根域名>"
+    AUTH_HOST="${AUTH_HOST:-auth.${ZONE_NAME}}"
+    DEPLOY_MODE="${DEPLOY_MODE:-local}"
+    CONFIG_POLICY="${CONFIG_POLICY:-merge-bindings}"
+    return 0
+  fi
+
+  echo ""
+  echo "=== pauth · Cloudflare 部署 ==="
+  echo ""
+  prompt REPO_URL "GitHub 仓库 URL" "$DEFAULT_REPO"
+  prompt GIT_BRANCH "分支" "$DEFAULT_BRANCH"
+  prompt INSTALL_DIR "安装目录" "$INSTALL_DIR"
+  prompt ZONE_NAME "根域名（Cloudflare 托管）" "${ZONE_NAME:-}"
+  [[ -n "$ZONE_NAME" ]] || die "根域名不能为空"
+  prompt AUTH_HOST "认证主机名" "${AUTH_HOST:-auth.${ZONE_NAME}}"
+  prompt RP_NAME "Passkey 显示名称" "$RP_NAME"
+  prompt DB_LOCATION "D1 区域" "$DB_LOCATION"
+  if [[ -z "$DEPLOY_MODE" ]]; then
+    echo ""
+    echo "部署方式:"
+    echo "  1) 本地上传（wrangler deploy，立即部署）"
+    echo "  2) GitHub 挂钩（生成 wrangler.production.jsonc，Cloudflare Builds 部署）"
+    read -r -p "选择 [1]: " dm
+    case "${dm:-1}" in
+      2) DEPLOY_MODE="git" ;;
+      *) DEPLOY_MODE="local" ;;
+    esac
+  fi
+  if [[ -z "$SESSION_SECRET" ]]; then
+    read -r -p "SESSION_SECRET（留空则自动生成）: " SESSION_SECRET
+  fi
+}
+
+apply_config_defaults() {
+  DEPLOY_MODE="${DEPLOY_MODE:-local}"
+  [[ "$DEPLOY_MODE" == "local" || "$DEPLOY_MODE" == "git" ]] || die "--deploy-mode 须为 local 或 git"
+  AUTH_HOST="${AUTH_HOST:-auth.${ZONE_NAME}}"
+  RP_ID="${RP_ID:-$ZONE_NAME}"
+  ORIGIN="${ORIGIN:-https://${AUTH_HOST}}"
+  COOKIE_DOMAIN="${COOKIE_DOMAIN:-.${ZONE_NAME}}"
+
+  if [[ -z "$SESSION_SECRET" ]]; then
+    if command -v openssl >/dev/null 2>&1; then
+      SESSION_SECRET="$(openssl rand -base64 32)"
+    else
+      SESSION_SECRET="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+    fi
+    info "已自动生成 SESSION_SECRET"
+  fi
+  [[ ${#SESSION_SECRET} -ge 32 ]] || die "SESSION_SECRET 至少 32 字符"
+}
+
+resolve_account_id() {
+  [[ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]] && return 0
+  CLOUDFLARE_ACCOUNT_ID="$(python3 -c "
+import re, sys
+for line in sys.stdin.read().splitlines():
+    for part in line.split('│'):
+        part = part.strip()
+        if re.fullmatch(r'[0-9a-f]{32}', part):
+            print(part)
+            raise SystemExit(0)
+" <<<"${WRANGLER_WHOAMI}")"
+  [[ -n "$CLOUDFLARE_ACCOUNT_ID" ]] || die "无法解析 Account ID；请 export CLOUDFLARE_ACCOUNT_ID=<32位 hex>"
+  export CLOUDFLARE_ACCOUNT_ID
+}
+
+# ── 预检 2/3：Cloudflare 权限 ─────────────────────────────────────────────────
+
+preflight_check_cloudflare() {
+  phase "预检 2/3 · Cloudflare 登录与权限"
+
+  info "Wrangler 登录状态"
+  WRANGLER_WHOAMI="$(npx wrangler whoami 2>&1)" || die "未登录：请先 npx wrangler login 或设置 CLOUDFLARE_API_TOKEN"
+  printf '%s\n' "$WRANGLER_WHOAMI"
+  resolve_account_id
+  ok "Account ID: ${CLOUDFLARE_ACCOUNT_ID}"
+
+  info "D1 读权限"
+  if ! npx wrangler d1 list --json >/dev/null 2>&1; then
+    die "无法列出 D1 数据库 — Token 需 D1 Read（或 Account D1 权限）"
+  fi
+  ok "D1 list"
+
+  info "KV 读权限"
+  if ! npx wrangler kv namespace list >/dev/null 2>&1; then
+    die "无法列出 KV namespace — Token 需 Workers KV Storage Read"
+  fi
+  ok "KV list"
+
+  info "Workers / Zone API 权限"
+  ZONE_NAME="$ZONE_NAME" AUTH_HOST="$AUTH_HOST" \
+    CLOUDFLARE_ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID" python3 <<'PY' || die "Cloudflare API 权限不足"
+import json, os, re, sys, urllib.parse, urllib.request
+from pathlib import Path
+
+API = "https://api.cloudflare.com/client/v4"
+account_id = os.environ["CLOUDFLARE_ACCOUNT_ID"]
+zone_name = os.environ.get("ZONE_NAME", "")
+auth_host = os.environ.get("AUTH_HOST", "")
+
+def load_token():
+    t = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
+    if t:
+        return t
+    for path in (
+        Path.home() / ".wrangler" / "config" / "default.toml",
+        Path.home() / ".config" / "wrangler" / "config" / "default.toml",
+    ):
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        for key in ("api_token", "oauth_token"):
+            m = re.search(rf'^{key}\s*=\s*"([^"]+)"', text, re.MULTILINE)
+            if m and m.group(1):
+                return m.group(1)
+    return ""
+
+def req(method, path, body=None):
+    token = load_token()
+    if not token:
+        print("OAuth 模式：跳过 REST API 细检（D1/KV wrangler 已通过）")
+        sys.exit(0)
+    data = None if body is None else json.dumps(body).encode("utf-8")
+    r = urllib.request.Request(
+        API + path,
+        data=data,
+        method=method,
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(r, timeout=60) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+    if not payload.get("success"):
+        errs = payload.get("errors") or [{}]
+        raise SystemExit(errs[0].get("message") or json.dumps(payload))
+    return payload
+
+req("GET", f"/accounts/{account_id}/workers/scripts")
+print("Workers Scripts list OK")
+
+if zone_name:
+    z = req("GET", f"/zones?name={urllib.parse.quote(zone_name)}&status=active&per_page=1")
+    zones = z.get("result") or []
+    if not zones or zones[0].get("name") != zone_name:
+        raise SystemExit(f"域名 {zone_name} 不在当前账户或未激活")
+    print(f"Zone OK: {zone_name}")
+    if auth_host and auth_host != zone_name and not auth_host.endswith("." + zone_name):
+        raise SystemExit(f"{auth_host} 不是 {zone_name} 下的主机名")
+PY
+  ok "Workers / Zone API"
+  export CLOUDFLARE_ACCOUNT_ID
+  ok "Cloudflare 预检通过"
+}
+
+# ── 预检 3/3：GitHub + lib 下载 ───────────────────────────────────────────────
+
+preflight_check_github() {
+  phase "预检 3/3 · GitHub 可达 + lib helper"
+
+  local lib_base
+  lib_base="$(github_raw_lib_base "$REPO_URL" "$GIT_BRANCH")"
+
+  info "检查 Git 仓库: $REPO_URL ($GIT_BRANCH)"
+  if ! git ls-remote --exit-code "$REPO_URL" "refs/heads/$GIT_BRANCH" >/dev/null 2>&1; then
+    die "无法访问 GitHub 仓库/分支: $REPO_URL ($GIT_BRANCH)"
+  fi
+  ok "git ls-remote"
+
+  HELPER_DIR="${TMPDIR:-/tmp}/pauth-deploy-$$"
+  mkdir -p "$HELPER_DIR/lib"
+  trap cleanup_helpers EXIT
+
+  local files=(wrangler-config.py bind-custom-domain.py)
+  for f in "${files[@]}"; do
+    info "下载 $f"
+    if ! curl -fsSL "${lib_base}/${f}" -o "$HELPER_DIR/lib/$f"; then
+      die "无法下载 ${lib_base}/${f}"
+    fi
+    [[ -s "$HELPER_DIR/lib/$f" ]] || die "下载为空: $f"
+    head -1 "$HELPER_DIR/lib/$f" | grep -q '^#!' || die "下载内容异常: $f（不是有效脚本）"
+    chmod +x "$HELPER_DIR/lib/$f"
+    ok "$f → $HELPER_DIR/lib/$f"
+  done
+
+  CONFIG_PY="$HELPER_DIR/lib/wrangler-config.py"
+  BIND_DOMAIN_PY="$HELPER_DIR/lib/bind-custom-domain.py"
+
+  info "验证 helper 可执行"
+  python3 "$CONFIG_PY" --help >/dev/null 2>&1 || die "wrangler-config.py 无法运行"
+  python3 "$BIND_DOMAIN_PY" --help >/dev/null 2>&1 || die "bind-custom-domain.py 无法运行"
+  ok "Python helper 可用"
+
+  ok "GitHub 预检通过"
+}
+
+refresh_helpers_from_install_dir() {
+  if [[ -f "$INSTALL_DIR/scripts/lib/wrangler-config.py" && -f "$INSTALL_DIR/scripts/lib/bind-custom-domain.py" ]]; then
+    CONFIG_PY="$INSTALL_DIR/scripts/lib/wrangler-config.py"
+    BIND_DOMAIN_PY="$INSTALL_DIR/scripts/lib/bind-custom-domain.py"
+    info "使用仓库内 helper: $INSTALL_DIR/scripts/lib/"
+  fi
+}
+
+# ── Wrangler 配置 ─────────────────────────────────────────────────────────────
 
 choose_config_policy() {
   local target="$1"
@@ -538,13 +447,12 @@ wrangler_config_py() {
     --d1-id "$D1_ID" \
     --kv-id "$KV_ID" \
     --kv-preview-id "$KV_PREVIEW_ID" \
+    --account-id "${CLOUDFLARE_ACCOUNT_ID:-}" \
     "$@"
 }
 
 write_wrangler_config() {
-  local target="$1"
-  local policy="$2"
-  local result
+  local target="$1" policy="$2" result
   result="$(wrangler_config_py "$target" "$policy")"
   case "$result" in
     CREATED) info "已创建 $(basename "$target")" ;;
@@ -559,12 +467,30 @@ load_vars_from_wrangler() {
   local file="$1"
   [[ -f "$file" ]] || return 0
   python3 -c "
-import json, re, sys
+import json, sys
 from pathlib import Path
+
+def strip_jsonc_comments(text: str) -> str:
+    out, i = [], 0
+    in_string = escape = False
+    while i < len(text):
+        ch = text[i]
+        if in_string:
+            out.append(ch)
+            if escape: escape = False
+            elif ch == '\\\\': escape = True
+            elif ch == '\"': in_string = False
+            i += 1; continue
+        if ch == '\"':
+            in_string = True; out.append(ch); i += 1; continue
+        if ch == '/' and i + 1 < len(text) and text[i + 1] == '/':
+            while i < len(text) and text[i] not in '\\n': i += 1
+            continue
+        out.append(ch); i += 1
+    return ''.join(out)
+
 p = Path(sys.argv[1])
-text = p.read_text()
-text = '\n'.join(re.sub(r'//.*$', '', line) for line in text.splitlines())
-cfg = json.loads(text)
+cfg = json.loads(strip_jsonc_comments(p.read_text(encoding='utf-8')))
 vars = cfg.get('vars') or {}
 routes = cfg.get('routes') or [{}]
 route = routes[0] if routes else {}
@@ -586,40 +512,8 @@ for k, v in out.items():
   rm -f /tmp/pauth-wrangler-load.env
 }
 
-print_git_instructions() {
-  local prod="$INSTALL_DIR/wrangler.production.jsonc"
-  cat <<EOF
-
-${CYAN}── GitHub 自动部署（Cloudflare Workers Builds）──${NC}
-
-1. 在 GitHub 安装 Cloudflare Workers & Pages App，授权仓库:
-   ${REPO_URL}
-
-2. Cloudflare Dashboard → Workers & Pages → ${WORKER_NAME} → Settings → Builds
-   Connect to Git → 选择仓库与分支 ${GIT_BRANCH}
-
-3. 构建配置:
-   Build command:  npm run build
-   Deploy command: npx wrangler deploy --config wrangler.production.jsonc
-
-4. 将生产配置提交到私有仓库（仅含资源 ID，不含 Secret）:
-   git add wrangler.production.jsonc
-   git commit -m "Add Cloudflare production wrangler config"
-   git push
-
-5. Settings → Variables and Secrets 中确认 SESSION_SECRET 已设置
-   （本脚本已上传；Git 构建不会读取 .dev.vars）
-
-6. 之后每次 push 到 ${GIT_BRANCH} 将自动构建部署。
-   数据库迁移仍需在发版后手动执行:
-   npm run db:migrate:remote
-
-配置文件: ${prod}
-EOF
-}
-
 verify_auth_zone() {
-  info "验证 ${ZONE_NAME} 在当前 Cloudflare 账户中…"
+  info "再次确认 ${ZONE_NAME} / ${AUTH_HOST}"
   python3 "$BIND_DOMAIN_PY" \
     --hostname "$AUTH_HOST" \
     --zone-name "$ZONE_NAME" \
@@ -629,7 +523,7 @@ verify_auth_zone() {
 
 bind_auth_domain() {
   [[ "$SKIP_DOMAIN_BIND" -eq 1 ]] && return 0
-  info "绑定 ${AUTH_HOST} → Worker ${WORKER_NAME}（覆盖已有 Worker / DNS 绑定）"
+  info "绑定 ${AUTH_HOST} → Worker ${WORKER_NAME}"
   if python3 "$BIND_DOMAIN_PY" \
     --hostname "$AUTH_HOST" \
     --zone-name "$ZONE_NAME" \
@@ -645,130 +539,84 @@ bind_auth_domain() {
     || die "无法绑定 ${AUTH_HOST}，请检查 Cloudflare 权限（Workers + DNS + Zone）"
 }
 
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --repo) REPO_URL="$2"; shift 2 ;;
-    --branch) GIT_BRANCH="$2"; shift 2 ;;
-    --dir) INSTALL_DIR="$2"; shift 2 ;;
-    --zone) ZONE_NAME="$2"; shift 2 ;;
-    --auth-host) AUTH_HOST="$2"; shift 2 ;;
-    --rp-name) RP_NAME="$2"; shift 2 ;;
-    --worker-name) WORKER_NAME="$2"; shift 2 ;;
-    --d1-name) D1_NAME="$2"; shift 2 ;;
-    --kv-title) KV_TITLE="$2"; shift 2 ;;
-    --db-location) DB_LOCATION="$2"; shift 2 ;;
-    --session-secret) SESSION_SECRET="$2"; shift 2 ;;
-    --deploy-mode) DEPLOY_MODE="$2"; shift 2 ;;
-    --config-policy) CONFIG_POLICY="$2"; shift 2 ;;
-    --rotate-secret) ROTATE_SECRET=1; shift ;;
-    --git-first-deploy) GIT_FIRST_DEPLOY=1; shift ;;
-    --skip-domain-bind) SKIP_DOMAIN_BIND=1; shift ;;
-    --skip-clone) SKIP_CLONE=1; shift ;;
-    --yes|-y) ASSUME_YES=1; NON_INTERACTIVE=1; shift ;;
-    -h|--help) usage; exit 0 ;;
-    *) die "Unknown option: $1" ;;
-  esac
-done
+print_git_instructions() {
+  cat <<EOF
 
-need_cmd() { command -v "$1" >/dev/null 2>&1 || die "Missing: $1"; }
-need_cmd node npm git python3
-ensure_helpers
+${CYAN}── GitHub 自动部署（Cloudflare Workers Builds）──${NC}
 
-NODE_MAJOR="$(node -p "process.versions.node.split('.')[0]")"
-[[ "$NODE_MAJOR" -ge 20 ]] || die "Node.js 20+ required"
+1. GitHub 安装 Cloudflare Workers & Pages App，授权: ${REPO_URL}
+2. Dashboard → ${WORKER_NAME} → Settings → Builds → Connect Git (${GIT_BRANCH})
+3. Build: npm run build   Deploy: npm run deploy:workers
+4. git add wrangler.production.jsonc && git commit && git push
+5. Dashboard 确认 SESSION_SECRET 已设置
 
-# ── Clone / pull (early, so we can read existing config) ───────────────────
+配置文件: ${INSTALL_DIR}/wrangler.production.jsonc
+EOF
+}
 
-if [[ "$SKIP_CLONE" -eq 1 ]]; then
-  INSTALL_DIR="$(cd "$INSTALL_DIR" && pwd)"
-  [[ -f "$INSTALL_DIR/package.json" ]] || die "Invalid pauth dir: $INSTALL_DIR"
-else
-  if [[ -d "$INSTALL_DIR/.git" ]]; then
-    git -C "$INSTALL_DIR" fetch origin "$GIT_BRANCH"
-    git -C "$INSTALL_DIR" checkout "$GIT_BRANCH"
-    git -C "$INSTALL_DIR" pull --ff-only origin "$GIT_BRANCH"
+print_finish() {
+  echo ""
+  echo "============================================"
+  printf '%b\n' "${GREEN}完成${NC}"
+  echo "  站点:     ${ORIGIN}"
+  echo "  域名:     ${AUTH_HOST}"
+  echo "  模式:     ${DEPLOY_MODE}"
+  echo "  本地配置: ${WRANGLER_LOCAL}"
+  [[ -f "$WRANGLER_PROD" ]] && echo "  CI 配置:  ${WRANGLER_PROD}"
+  echo "  D1:       ${D1_NAME} (${D1_ID})"
+  echo "  KV:       ${KV_TITLE} (${KV_ID})"
+  echo ""
+  if [[ "$DEPLOY_MODE" == "git" ]]; then
+    print_git_instructions
   else
-    mkdir -p "$(dirname "$INSTALL_DIR")"
-    git clone --branch "$GIT_BRANCH" --depth 1 "$REPO_URL" "$INSTALL_DIR"
+    warn "SESSION_SECRET 在 .dev.vars，勿提交 git"
   fi
-  INSTALL_DIR="$(cd "$INSTALL_DIR" && pwd)"
-fi
+  warn "发版后有新 migration: npm run db:migrate:remote"
+  echo "============================================"
+}
 
-WRANGLER_LOCAL="$INSTALL_DIR/wrangler.local.jsonc"
-WRANGLER_PROD="$INSTALL_DIR/wrangler.production.jsonc"
-EXISTING_CFG=""
-if [[ -f "$WRANGLER_LOCAL" ]]; then
-  EXISTING_CFG="$WRANGLER_LOCAL"
-elif [[ -f "$WRANGLER_PROD" ]]; then
-  EXISTING_CFG="$WRANGLER_PROD"
-fi
-load_vars_from_wrangler "$EXISTING_CFG"
+# ── 主流程：clone / 资源 / 部署 ───────────────────────────────────────────────
 
-if [[ "$NON_INTERACTIVE" -eq 0 ]]; then
-  echo ""
-  echo "=== pauth · Cloudflare 部署 ==="
-  echo ""
-  prompt REPO_URL "GitHub 仓库 URL" "$DEFAULT_REPO"
-  prompt GIT_BRANCH "分支" "$DEFAULT_BRANCH"
-  prompt INSTALL_DIR "安装目录" "$INSTALL_DIR"
-  prompt ZONE_NAME "根域名（Cloudflare 托管）" "${ZONE_NAME:-}"
-  [[ -n "$ZONE_NAME" ]] || die "根域名不能为空"
-  prompt AUTH_HOST "认证主机名" "${AUTH_HOST:-auth.${ZONE_NAME}}"
-  prompt RP_NAME "Passkey 显示名称" "${RP_NAME:-$DEFAULT_RP_NAME}"
-  prompt DB_LOCATION "D1 区域" "$DEFAULT_DB_LOCATION"
-  if [[ -z "$DEPLOY_MODE" ]]; then
+run_provision() {
+  phase "开始部署 · 获取源码"
+
+  if [[ "$SKIP_CLONE" -eq 1 ]]; then
+    INSTALL_DIR="$(cd "$INSTALL_DIR" && pwd)"
+    [[ -f "$INSTALL_DIR/package.json" ]] || die "无效目录: $INSTALL_DIR"
+  else
+    if [[ -d "$INSTALL_DIR/.git" ]]; then
+      git -C "$INSTALL_DIR" fetch origin "$GIT_BRANCH"
+      git -C "$INSTALL_DIR" checkout "$GIT_BRANCH"
+      git -C "$INSTALL_DIR" pull --ff-only origin "$GIT_BRANCH"
+    else
+      mkdir -p "$(dirname "$INSTALL_DIR")"
+      git clone --branch "$GIT_BRANCH" --depth 1 "$REPO_URL" "$INSTALL_DIR"
+    fi
+    INSTALL_DIR="$(cd "$INSTALL_DIR" && pwd)"
+  fi
+  ok "源码: $INSTALL_DIR"
+  refresh_helpers_from_install_dir
+
+  WRANGLER_LOCAL="$INSTALL_DIR/wrangler.local.jsonc"
+  WRANGLER_PROD="$INSTALL_DIR/wrangler.production.jsonc"
+  EXISTING_CFG=""
+  if [[ -f "$WRANGLER_LOCAL" ]]; then
+    EXISTING_CFG="$WRANGLER_LOCAL"
+  elif [[ -f "$WRANGLER_PROD" ]]; then
+    EXISTING_CFG="$WRANGLER_PROD"
+  fi
+  load_vars_from_wrangler "$EXISTING_CFG"
+
+  if [[ "$NON_INTERACTIVE" -eq 0 ]]; then
     echo ""
-    echo "部署方式:"
-    echo "  1) 本地上传（wrangler deploy，立即部署）"
-    echo "  2) GitHub 挂钩（生成 wrangler.production.jsonc，由 Cloudflare Builds 自动部署）"
-    read -r -p "选择 [1]: " dm
-    case "${dm:-1}" in
-      2) DEPLOY_MODE="git" ;;
-      *) DEPLOY_MODE="local" ;;
-    esac
+    info "目标: https://${AUTH_HOST}  模式: ${DEPLOY_MODE}"
+    confirm "预检已通过，开始创建/更新 Cloudflare 资源？" || exit 0
   fi
-  if [[ -z "$SESSION_SECRET" ]]; then
-    read -r -p "SESSION_SECRET（留空则自动生成）: " SESSION_SECRET
-  fi
-  echo ""
-  info "目标: https://${AUTH_HOST}  模式: ${DEPLOY_MODE}"
-  confirm "继续？" || exit 0
-else
-  [[ -n "$ZONE_NAME" ]] || die "--yes 需要 --zone"
-  AUTH_HOST="${AUTH_HOST:-auth.${ZONE_NAME}}"
-  DEPLOY_MODE="${DEPLOY_MODE:-local}"
-  CONFIG_POLICY="${CONFIG_POLICY:-merge-bindings}"
-fi
 
-DEPLOY_MODE="${DEPLOY_MODE:-local}"
-[[ "$DEPLOY_MODE" == "local" || "$DEPLOY_MODE" == "git" ]] || die "--deploy-mode 须为 local 或 git"
+  cd "$INSTALL_DIR"
 
-RP_ID="${RP_ID:-$ZONE_NAME}"
-ORIGIN="${ORIGIN:-https://${AUTH_HOST}}"
-COOKIE_DOMAIN="${COOKIE_DOMAIN:-.${ZONE_NAME}}"
-
-if [[ -z "$SESSION_SECRET" ]]; then
-  if command -v openssl >/dev/null 2>&1; then
-    SESSION_SECRET="$(openssl rand -base64 32)"
-  else
-    SESSION_SECRET="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
-  fi
-  info "已自动生成 SESSION_SECRET"
-fi
-[[ ${#SESSION_SECRET} -ge 32 ]] || die "SESSION_SECRET 至少 32 字符"
-
-info "检查 Wrangler 登录…"
-npx wrangler whoami >/dev/null 2>&1 || die "请先 npx wrangler login 或设置 CLOUDFLARE_API_TOKEN"
-npx wrangler whoami
-
-verify_auth_zone
-
-cd "$INSTALL_DIR"
-
-# ── D1 / KV ────────────────────────────────────────────────────────────────
-
-find_d1_id() {
-  npx wrangler d1 list --json 2>/dev/null | python3 -c "
+  find_d1_id() {
+    npx wrangler d1 list --json 2>/dev/null | python3 -c "
 import json, sys
 name = sys.argv[1]
 for row in json.load(sys.stdin):
@@ -776,16 +624,16 @@ for row in json.load(sys.stdin):
         print(row.get('uuid') or row.get('database_id') or '')
         break
 " "$D1_NAME"
-}
+  }
 
-create_d1() {
-  info "创建 D1: $D1_NAME ($DB_LOCATION)"
-  npx wrangler d1 create "$D1_NAME" --location "$DB_LOCATION" >/dev/null
-}
+  create_d1() {
+    info "创建 D1: $D1_NAME ($DB_LOCATION)"
+    npx wrangler d1 create "$D1_NAME" --location "$DB_LOCATION" >/dev/null
+  }
 
-find_kv_id() {
-  local title="$1" want_preview="${2:-0}"
-  npx wrangler kv namespace list 2>/dev/null | python3 -c "
+  find_kv_id() {
+    local title="$1" want_preview="${2:-0}"
+    npx wrangler kv namespace list 2>/dev/null | python3 -c "
 import json, sys
 title, want = sys.argv[1], sys.argv[2] == '1'
 raw = sys.stdin.read().strip()
@@ -800,92 +648,86 @@ for row in data if isinstance(data, list) else []:
     if not want and t == title and not prev:
         print(row.get('id', '')); break
 " "$title" "$want_preview"
-}
+  }
 
-create_kv() {
-  local title="$1" preview="${2:-}"
-  info "创建 KV: $title${preview:+ (preview)}"
-  local out id
-  if [[ -n "$preview" ]]; then
-    out="$(npx wrangler kv namespace create "$title" --preview 2>&1)"
-  else
-    out="$(npx wrangler kv namespace create "$title" 2>&1)"
-  fi
-  id="$(printf '%s' "$out" | python3 -c "
-import re,sys
-t=sys.stdin.read()
-m=re.search(r'\"id\":\s*\"([a-f0-9]{32})\"',t) or re.search(r\"id\s*=\s*['\\\"]([a-f0-9]{32})['\\\"]\",t)
+  create_kv() {
+    local title="$1" preview="${2:-}" out id
+    info "创建 KV: $title${preview:+ (preview)}"
+    if [[ -n "$preview" ]]; then
+      out="$(npx wrangler kv namespace create "$title" --preview 2>&1)"
+    else
+      out="$(npx wrangler kv namespace create "$title" 2>&1)"
+    fi
+    id="$(printf '%s' "$out" | python3 -c "
+import re, sys
+t = sys.stdin.read()
+m = re.search(r'\"(?:id|preview_id)\":\s*\"([a-f0-9]{32})\"', t)
+if not m:
+    m = re.search(r\"id\s*=\s*['\\\"]([a-f0-9]{32})['\\\"]\", t)
 print(m.group(1) if m else '')
 ")"
-  [[ -n "$id" ]] || die "KV 创建失败: $out"
-  printf '%s' "$id"
-}
+    [[ -n "$id" ]] || die "KV 创建失败: $out"
+    printf '%s' "$id"
+  }
 
-# Reuse IDs from existing local config when user chose keep (set below for migrate only)
-KEEP_EXISTING_CONFIG=0
+  phase "Cloudflare 资源 · D1 / KV"
 
-D1_ID="$(find_d1_id || true)"
-if [[ -z "$D1_ID" ]]; then create_d1; D1_ID="$(find_d1_id)"; fi
-[[ -n "$D1_ID" ]] || die "无法获取 D1 id"
-info "D1: $D1_NAME → $D1_ID"
+  D1_ID="$(find_d1_id || true)"
+  if [[ -z "$D1_ID" ]]; then create_d1; D1_ID="$(find_d1_id)"; fi
+  [[ -n "$D1_ID" ]] || die "无法获取 D1 id"
+  info "D1: $D1_NAME → $D1_ID"
 
-KV_ID="${KV_ID:-$(find_kv_id "$KV_TITLE" || true)}"
-[[ -z "$KV_ID" ]] && KV_ID="$(create_kv "$KV_TITLE")"
-KV_PREVIEW_ID="${KV_PREVIEW_ID:-$(find_kv_id "$KV_TITLE" 1 || true)}"
-[[ -z "$KV_PREVIEW_ID" ]] && KV_PREVIEW_ID="$(create_kv "$KV_TITLE" --preview)"
-info "KV: $KV_TITLE → $KV_ID"
+  KV_ID="${KV_ID:-$(find_kv_id "$KV_TITLE" || true)}"
+  [[ -z "$KV_ID" ]] && KV_ID="$(create_kv "$KV_TITLE")"
+  KV_PREVIEW_ID="${KV_PREVIEW_ID:-$(find_kv_id "$KV_TITLE" 1 || true)}"
+  [[ -z "$KV_PREVIEW_ID" ]] && KV_PREVIEW_ID="$(create_kv "$KV_TITLE" --preview)"
+  info "KV: $KV_TITLE → $KV_ID"
 
-# ── Wrangler config (interactive policy per file) ───────────────────────────
+  phase "Wrangler 配置"
 
-write_config_pair() {
-  local policy_local="$1" policy_prod="$2"
-  write_wrangler_config "$WRANGLER_LOCAL" "$policy_local"
-  if [[ "$DEPLOY_MODE" == "git" ]]; then
-    write_wrangler_config "$WRANGLER_PROD" "$policy_prod"
-  elif [[ -f "$WRANGLER_PROD" ]]; then
-    write_wrangler_config "$WRANGLER_PROD" "$policy_prod"
-  fi
-}
-
-if [[ -n "$CONFIG_POLICY" ]]; then
-  local_policy="$CONFIG_POLICY"
-  prod_policy="$CONFIG_POLICY"
-  write_config_pair "$local_policy" "$prod_policy"
-else
-  local_policy=""
-  choose_config_policy "$WRANGLER_LOCAL" local_policy
-  if [[ "$DEPLOY_MODE" == "git" ]]; then
-    prod_policy=""
-    if [[ -f "$WRANGLER_PROD" && "$local_policy" != "keep" ]]; then
-      choose_config_policy "$WRANGLER_PROD" prod_policy
-    else
-      prod_policy="$local_policy"
+  write_config_pair() {
+    local policy_local="$1" policy_prod="$2"
+    write_wrangler_config "$WRANGLER_LOCAL" "$policy_local"
+    if [[ "$DEPLOY_MODE" == "git" ]]; then
+      write_wrangler_config "$WRANGLER_PROD" "$policy_prod"
+    elif [[ -f "$WRANGLER_PROD" ]]; then
+      write_wrangler_config "$WRANGLER_PROD" "$policy_prod"
     fi
+  }
+
+  local local_policy="" prod_policy=""
+  if [[ -n "$CONFIG_POLICY" ]]; then
+    local_policy="$CONFIG_POLICY"
+    prod_policy="$CONFIG_POLICY"
     write_config_pair "$local_policy" "$prod_policy"
   else
-    write_wrangler_config "$WRANGLER_LOCAL" "$local_policy"
+    choose_config_policy "$WRANGLER_LOCAL" local_policy
+    if [[ "$DEPLOY_MODE" == "git" ]]; then
+      if [[ -f "$WRANGLER_PROD" && "$local_policy" != "keep" ]]; then
+        choose_config_policy "$WRANGLER_PROD" prod_policy
+      else
+        prod_policy="$local_policy"
+      fi
+      write_config_pair "$local_policy" "$prod_policy"
+    else
+      write_wrangler_config "$WRANGLER_LOCAL" "$local_policy"
+    fi
   fi
-fi
 
-[[ "$local_policy" == "keep" || "$CONFIG_POLICY" == "keep" ]] && KEEP_EXISTING_CONFIG=1
-
-# .dev.vars — respect keep unless rotate
-DEV_VARS="$INSTALL_DIR/.dev.vars"
-if [[ -f "$DEV_VARS" && "$ROTATE_SECRET" -eq 0 ]]; then
-  if [[ "$NON_INTERACTIVE" -eq 0 ]]; then
+  DEV_VARS="$INSTALL_DIR/.dev.vars"
+  if [[ -f "$DEV_VARS" && "$ROTATE_SECRET" -eq 0 && "$NON_INTERACTIVE" -eq 0 ]]; then
     read -r -p "已存在 .dev.vars，是否更新 SESSION_SECRET？[y/N]: " rot
     [[ "$rot" =~ ^[Yy]$ ]] && ROTATE_SECRET=1
-  else
-    info "保留 .dev.vars（使用 --rotate-secret 可强制更新）"
+  elif [[ -f "$DEV_VARS" && "$ROTATE_SECRET" -eq 0 ]]; then
+    info "保留 .dev.vars（--rotate-secret 可强制更新）"
   fi
-fi
-if [[ ! -f "$DEV_VARS" || "$ROTATE_SECRET" -eq 1 ]]; then
-  printf 'SESSION_SECRET=%s\n' "$SESSION_SECRET" >"$DEV_VARS"
-  chmod 600 "$DEV_VARS" 2>/dev/null || true
-fi
+  if [[ ! -f "$DEV_VARS" || "$ROTATE_SECRET" -eq 1 ]]; then
+    printf 'SESSION_SECRET=%s\n' "$SESSION_SECRET" >"$DEV_VARS"
+    chmod 600 "$DEV_VARS" 2>/dev/null || true
+  fi
 
-cat >"$INSTALL_DIR/.deploy-cloudflare.env" <<EOF
-# Generated by deploy-cloudflare.sh — do not commit
+  cat >"$INSTALL_DIR/.deploy-cloudflare.env" <<EOF
+# Generated by full-deploy-cloudflare.sh
 DEPLOY_MODE=${DEPLOY_MODE}
 ZONE_NAME=${ZONE_NAME}
 AUTH_HOST=${AUTH_HOST}
@@ -893,59 +735,67 @@ ORIGIN=${ORIGIN}
 D1_ID=${D1_ID}
 KV_ID=${KV_ID}
 KV_PREVIEW_ID=${KV_PREVIEW_ID}
+CLOUDFLARE_ACCOUNT_ID=${CLOUDFLARE_ACCOUNT_ID:-}
 EOF
-chmod 600 "$INSTALL_DIR/.deploy-cloudflare.env" 2>/dev/null || true
+  chmod 600 "$INSTALL_DIR/.deploy-cloudflare.env" 2>/dev/null || true
 
-# ── Build, secrets, migrate ─────────────────────────────────────────────────
+  verify_auth_zone
+}
 
-info "npm install && npm run build"
-npm install
-npm run build
+run_deploy() {
+  phase "构建与发布"
 
-WRANGLER_CFG="$WRANGLER_LOCAL"
-[[ -f "$WRANGLER_CFG" ]] || die "缺少 $WRANGLER_CFG"
+  info "npm install && npm run build"
+  npm install
+  npm run build
 
-info "上传 SESSION_SECRET 到 Worker"
-printf '%s' "$SESSION_SECRET" | npx wrangler secret put SESSION_SECRET -c "$WRANGLER_CFG"
+  WRANGLER_CFG="$WRANGLER_LOCAL"
+  [[ -f "$WRANGLER_CFG" ]] || die "缺少 $WRANGLER_CFG"
 
-info "应用 D1 迁移（remote）"
-npx wrangler d1 migrations apply "$D1_NAME" --remote -c "$WRANGLER_CFG"
+  info "上传 SESSION_SECRET"
+  printf '%s' "$SESSION_SECRET" | npx wrangler secret put SESSION_SECRET -c "$WRANGLER_CFG"
 
-# ── Deploy ──────────────────────────────────────────────────────────────────
+  info "D1 迁移（remote）"
+  npx wrangler d1 migrations apply DB --remote -c "$WRANGLER_CFG"
 
-RUN_LOCAL_DEPLOY=0
-if [[ "$DEPLOY_MODE" == "local" ]]; then
-  RUN_LOCAL_DEPLOY=1
-elif [[ "$GIT_FIRST_DEPLOY" -eq 1 ]]; then
-  RUN_LOCAL_DEPLOY=1
-elif [[ "$NON_INTERACTIVE" -eq 0 ]]; then
-  read -r -p "Git 模式：是否现在执行一次本地 wrangler deploy 注册 Worker？[y/N]: " fd
-  [[ "$fd" =~ ^[Yy]$ ]] && RUN_LOCAL_DEPLOY=1
-fi
+  RUN_LOCAL_DEPLOY=0
+  if [[ "$DEPLOY_MODE" == "local" ]]; then
+    RUN_LOCAL_DEPLOY=1
+  elif [[ "$GIT_FIRST_DEPLOY" -eq 1 ]]; then
+    RUN_LOCAL_DEPLOY=1
+  elif [[ "$NON_INTERACTIVE" -eq 0 ]]; then
+    read -r -p "Git 模式：是否现在本地 deploy 注册 Worker？[y/N]: " fd
+    [[ "$fd" =~ ^[Yy]$ ]] && RUN_LOCAL_DEPLOY=1
+  fi
 
-if [[ "$RUN_LOCAL_DEPLOY" -eq 1 ]]; then
-  info "部署 Worker（本地 wrangler deploy）"
-  npm run deploy
-fi
+  if [[ "$RUN_LOCAL_DEPLOY" -eq 1 ]]; then
+    info "wrangler deploy"
+    npm run deploy
+  fi
 
-bind_auth_domain
+  bind_auth_domain
+}
 
-echo ""
-echo "============================================"
-printf '%b\n' "${GREEN}完成${NC}"
-echo "  站点:     ${ORIGIN}"
-echo "  域名:     ${AUTH_HOST}（已绑定到 ${WORKER_NAME}）"
-echo "  模式:     ${DEPLOY_MODE}"
-echo "  本地配置: ${WRANGLER_LOCAL}"
-[[ -f "$WRANGLER_PROD" ]] && echo "  CI 配置:  ${WRANGLER_PROD}"
-echo "  D1:       ${D1_NAME} (${D1_ID})"
-echo "  KV:       ${KV_TITLE} (${KV_ID})"
-echo ""
+# ── 入口 ──────────────────────────────────────────────────────────────────────
 
-if [[ "$DEPLOY_MODE" == "git" ]]; then
-  print_git_instructions
-else
-  warn "SESSION_SECRET 在 .dev.vars，勿提交 git"
-fi
-warn "发版后有新 migration 时请执行: npm run db:migrate:remote"
-echo "============================================"
+main() {
+  parse_args "$@"
+
+  preflight_check_tools
+  collect_config
+  apply_config_defaults
+
+  preflight_check_cloudflare
+  preflight_check_github
+
+  echo ""
+  ok "三项预检全部通过"
+  info "目标: https://${AUTH_HOST}  仓库: ${REPO_URL} (${GIT_BRANCH})"
+  echo ""
+
+  run_provision
+  run_deploy
+  print_finish
+}
+
+main "$@"

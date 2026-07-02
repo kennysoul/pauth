@@ -60,7 +60,7 @@ Options:
   --yes, -y               Non-interactive
   -h, --help
 
-See also: full-deploy-cloudflare.sh (full local one-shot, uses scripts/lib/*.py)
+See also: full-deploy-cloudflare.sh（单文件全量部署，预检后从 GitHub 拉 lib 到临时目录）
 EOF
 }
 

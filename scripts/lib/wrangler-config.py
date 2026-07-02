@@ -10,10 +10,41 @@ from pathlib import Path
 from typing import Any
 
 
+def strip_jsonc_comments(text: str) -> str:
+    """Remove // line comments without breaking https:// inside strings."""
+    out: list[str] = []
+    i = 0
+    in_string = False
+    escape = False
+    while i < len(text):
+        ch = text[i]
+        if in_string:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "/" and i + 1 < len(text) and text[i + 1] == "/":
+            while i < len(text) and text[i] not in "\n":
+                i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def load_jsonc(path: Path) -> dict[str, Any]:
     text = path.read_text(encoding="utf-8")
-    lines = [re.sub(r"//.*$", "", line) for line in text.splitlines()]
-    return json.loads("\n".join(lines))
+    return json.loads(strip_jsonc_comments(text))
 
 
 def dump_jsonc(data: dict[str, Any]) -> str:
@@ -21,7 +52,7 @@ def dump_jsonc(data: dict[str, Any]) -> str:
 
 
 def build_desired(args: argparse.Namespace) -> dict[str, Any]:
-    return {
+    cfg: dict[str, Any] = {
         "$schema": "node_modules/wrangler/config-schema.json",
         "name": args.worker_name,
         "main": "src/index.ts",
@@ -66,6 +97,9 @@ def build_desired(args: argparse.Namespace) -> dict[str, Any]:
         ],
         "observability": {"enabled": True},
     }
+    if args.account_id:
+        cfg["account_id"] = args.account_id
+    return cfg
 
 
 def diff_summary(existing: dict[str, Any], desired: dict[str, Any]) -> list[str]:
@@ -104,17 +138,24 @@ def diff_summary(existing: dict[str, Any], desired: dict[str, Any]) -> list[str]
     if existing.get("name") != desired.get("name"):
         lines.append(f"name: {existing.get('name')} → {desired.get('name')}")
 
+    if existing.get("account_id") != desired.get("account_id") and desired.get("account_id"):
+        lines.append(
+            f"account_id: {existing.get('account_id') or '(空)'} → {desired.get('account_id')}"
+        )
+
     return lines
 
 
 def merge_config(existing: dict[str, Any], desired: dict[str, Any]) -> dict[str, Any]:
-  merged = json.loads(json.dumps(existing))
-  merged["d1_databases"] = desired["d1_databases"]
-  merged["kv_namespaces"] = desired["kv_namespaces"]
-  for key in ("$schema", "main", "compatibility_date", "compatibility_flags", "assets", "observability"):
-      if key in desired:
-          merged[key] = desired[key]
-  return merged
+    merged = json.loads(json.dumps(existing))
+    merged["d1_databases"] = desired["d1_databases"]
+    merged["kv_namespaces"] = desired["kv_namespaces"]
+    for key in ("$schema", "main", "compatibility_date", "compatibility_flags", "assets", "observability"):
+        if key in desired:
+            merged[key] = desired[key]
+    if desired.get("account_id"):
+        merged["account_id"] = desired["account_id"]
+    return merged
 
 
 def main() -> int:
@@ -132,6 +173,7 @@ def main() -> int:
     parser.add_argument("--d1-id", required=True)
     parser.add_argument("--kv-id", required=True)
     parser.add_argument("--kv-preview-id", required=True)
+    parser.add_argument("--account-id", default="")
     parser.add_argument("--diff-only", action="store_true")
     args = parser.parse_args()
 
@@ -144,6 +186,10 @@ def main() -> int:
             return 0
         target.write_text(dump_jsonc(desired), encoding="utf-8")
         print("CREATED")
+        return 0
+
+    if args.policy == "keep" and not args.diff_only:
+        print("KEPT")
         return 0
 
     existing = load_jsonc(target)

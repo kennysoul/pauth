@@ -92,368 +92,46 @@ ensure_helpers() {
 
   HELPER_DIR="${TMPDIR:-/tmp}/pauth-deploy-$$"
   mkdir -p "$HELPER_DIR/lib"
+  local branch="${GIT_BRANCH:-main}"
+  local base="https://raw.githubusercontent.com/kennysoul/pauth/${branch}/scripts/lib"
+  if command -v curl >/dev/null 2>&1 \
+     && curl -fsSL "$base/wrangler-config.py" -o "$HELPER_DIR/lib/wrangler-config.py" \
+     && curl -fsSL "$base/bind-custom-domain.py" -o "$HELPER_DIR/lib/bind-custom-domain.py"; then
+    chmod +x "$HELPER_DIR/lib/"*.py
+    CONFIG_PY="$HELPER_DIR/lib/wrangler-config.py"
+    BIND_DOMAIN_PY="$HELPER_DIR/lib/bind-custom-domain.py"
+    trap 'rm -rf "$HELPER_DIR"' EXIT
+    return
+  fi
+  die "无法加载 helper 脚本（需要 scripts/lib/ 或 curl 访问 GitHub）"
+}
 
-  cat >"$HELPER_DIR/lib/wrangler-config.py" <<'PY'
-#!/usr/bin/env python3
-"""Merge or write wrangler JSONC configs for deploy-cloudflare.sh."""
-from __future__ import annotations
+refresh_helpers_from_install_dir() {
+  if [[ -f "$INSTALL_DIR/scripts/lib/wrangler-config.py" && -f "$INSTALL_DIR/scripts/lib/bind-custom-domain.py" ]]; then
+    CONFIG_PY="$INSTALL_DIR/scripts/lib/wrangler-config.py"
+    BIND_DOMAIN_PY="$INSTALL_DIR/scripts/lib/bind-custom-domain.py"
+  fi
+}
 
-import argparse
-import json
-import re
-import sys
-from pathlib import Path
-from typing import Any
+warn_stale_ca_certs() {
+  if [[ -n "${NODE_EXTRA_CA_CERTS:-}" && ! -f "${NODE_EXTRA_CA_CERTS}" ]]; then
+    warn "NODE_EXTRA_CA_CERTS 指向不存在的文件，Wrangler 可能报警（可 unset NODE_EXTRA_CA_CERTS）"
+  fi
+}
 
-
-def load_jsonc(path: Path) -> dict[str, Any]:
-    text = path.read_text(encoding="utf-8")
-    lines = [re.sub(r"//.*$", "", line) for line in text.splitlines()]
-    return json.loads("\n".join(lines))
-
-
-def dump_jsonc(data: dict[str, Any]) -> str:
-    return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
-
-
-def build_desired(args: argparse.Namespace) -> dict[str, Any]:
-    return {
-        "$schema": "node_modules/wrangler/config-schema.json",
-        "name": args.worker_name,
-        "main": "src/index.ts",
-        "compatibility_date": "2025-06-05",
-        "compatibility_flags": ["nodejs_compat"],
-        "vars": {
-            "RP_ID": args.rp_id,
-            "RP_NAME": args.rp_name,
-            "ORIGIN": args.origin,
-            "COOKIE_DOMAIN": args.cookie_domain,
-            "AUTH_HOST": args.auth_host,
-            "SESSION_TTL_SECONDS": "604800",
-            "SETUP_TTL_SECONDS": "600",
-        },
-        "assets": {
-            "directory": "./dist",
-            "binding": "ASSETS",
-            "not_found_handling": "single-page-application",
-            "run_worker_first": True,
-        },
-        "d1_databases": [
-            {
-                "binding": "DB",
-                "database_name": args.d1_name,
-                "database_id": args.d1_id,
-                "migrations_dir": "migrations",
-            }
-        ],
-        "kv_namespaces": [
-            {
-                "binding": "CHALLENGES",
-                "id": args.kv_id,
-                "preview_id": args.kv_preview_id,
-            }
-        ],
-        "routes": [
-            {
-                "pattern": args.auth_host,
-                "zone_name": args.zone_name,
-                "custom_domain": True,
-            }
-        ],
-        "observability": {"enabled": True},
-    }
-
-
-def diff_summary(existing: dict[str, Any], desired: dict[str, Any]) -> list[str]:
-    lines: list[str] = []
-
-    def var(key: str) -> str:
-        return str((existing.get("vars") or {}).get(key, ""))
-
-    def dvar(key: str) -> str:
-        return str((desired.get("vars") or {}).get(key, ""))
-
-    for key in ("RP_ID", "RP_NAME", "ORIGIN", "COOKIE_DOMAIN", "AUTH_HOST"):
-        if var(key) != dvar(key):
-            lines.append(f"vars.{key}: {var(key) or '(空)'} → {dvar(key)}")
-
-    ex_d1 = ((existing.get("d1_databases") or [{}])[0]).get("database_id", "")
-    de_d1 = ((desired.get("d1_databases") or [{}])[0]).get("database_id", "")
-    if ex_d1 != de_d1:
-        lines.append(f"d1.database_id: {ex_d1 or '(空)'} → {de_d1}")
-
-    ex_kv = ((existing.get("kv_namespaces") or [{}])[0]).get("id", "")
-    de_kv = ((desired.get("kv_namespaces") or [{}])[0]).get("id", "")
-    if ex_kv != de_kv:
-        lines.append(f"kv.id: {ex_kv or '(空)'} → {de_kv}")
-
-    ex_prev = ((existing.get("kv_namespaces") or [{}])[0]).get("preview_id", "")
-    de_prev = ((desired.get("kv_namespaces") or [{}])[0]).get("preview_id", "")
-    if ex_prev != de_prev:
-        lines.append(f"kv.preview_id: {ex_prev or '(空)'} → {de_prev}")
-
-    ex_route = ((existing.get("routes") or [{}])[0]).get("pattern", "")
-    de_route = ((desired.get("routes") or [{}])[0]).get("pattern", "")
-    if ex_route != de_route:
-        lines.append(f"routes.pattern: {ex_route or '(空)'} → {de_route}")
-
-    if existing.get("name") != desired.get("name"):
-        lines.append(f"name: {existing.get('name')} → {desired.get('name')}")
-
-    return lines
-
-
-def merge_config(existing: dict[str, Any], desired: dict[str, Any]) -> dict[str, Any]:
-    merged = json.loads(json.dumps(existing))
-    merged["d1_databases"] = desired["d1_databases"]
-    merged["kv_namespaces"] = desired["kv_namespaces"]
-    for key in ("$schema", "main", "compatibility_date", "compatibility_flags", "assets", "observability"):
-        if key in desired:
-            merged[key] = desired[key]
-    return merged
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--target", required=True)
-    parser.add_argument("--policy", choices=("keep", "merge-bindings", "overwrite"), required=True)
-    parser.add_argument("--worker-name", required=True)
-    parser.add_argument("--zone-name", required=True)
-    parser.add_argument("--auth-host", required=True)
-    parser.add_argument("--rp-id", required=True)
-    parser.add_argument("--rp-name", required=True)
-    parser.add_argument("--origin", required=True)
-    parser.add_argument("--cookie-domain", required=True)
-    parser.add_argument("--d1-name", required=True)
-    parser.add_argument("--d1-id", required=True)
-    parser.add_argument("--kv-id", required=True)
-    parser.add_argument("--kv-preview-id", required=True)
-    parser.add_argument("--diff-only", action="store_true")
-    args = parser.parse_args()
-
-    target = Path(args.target)
-    desired = build_desired(args)
-
-    if not target.exists():
-        if args.diff_only:
-            print("NEW")
-            return 0
-        target.write_text(dump_jsonc(desired), encoding="utf-8")
-        print("CREATED")
-        return 0
-
-    existing = load_jsonc(target)
-    changes = diff_summary(existing, desired)
-
-    if args.diff_only:
-        if not changes:
-            print("SAME")
-        else:
-            print("\n".join(changes))
-        return 0
-
-    if args.policy == "keep":
-        print("KEPT")
-        return 0
-
-    if args.policy == "merge-bindings":
-        merged = merge_config(existing, desired)
-        target.write_text(dump_jsonc(merged), encoding="utf-8")
-        print("MERGED")
-        return 0
-
-    target.write_text(dump_jsonc(desired), encoding="utf-8")
-    print("OVERWRITTEN")
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
-PY
-
-  cat >"$HELPER_DIR/lib/bind-custom-domain.py" <<'PY'
-#!/usr/bin/env python3
-"""Verify Cloudflare zone ownership and force-bind a Worker custom domain."""
-from __future__ import annotations
-
-import argparse
-import json
-import os
-import re
-import subprocess
-import sys
-import urllib.error
-import urllib.parse
-import urllib.request
-from pathlib import Path
-from typing import Any
-
-
-API_BASE = "https://api.cloudflare.com/client/v4"
-
-
-def load_api_token() -> str:
-    token = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
-    if token:
-        return token
-
-    home = Path(os.environ.get("WRANGLER_HOME", Path.home() / ".wrangler"))
-    config_paths = [
-        home / "config" / "default.toml",
-        Path.home() / ".config" / ".wrangler" / "config" / "default.toml",
-    ]
-    for path in config_paths:
-        if not path.exists():
-            continue
-        text = path.read_text(encoding="utf-8")
-        for key in ("api_token", "oauth_token"):
-            m = re.search(rf'^{key}\s*=\s*"([^"]+)"', text, re.MULTILINE)
-            if m and m.group(1):
-                return m.group(1)
-    die("需要 CLOUDFLARE_API_TOKEN 或已执行 wrangler login")
-
-
-def die(msg: str) -> None:
-    print(f"ERROR: {msg}", file=sys.stderr)
-    sys.exit(1)
-
-
-def api_request(
-    token: str,
-    method: str,
-    path: str,
-    body: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    url = f"{API_BASE}{path}"
-    data = None if body is None else json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=data,
-        method=method,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", errors="replace")
-        try:
-            parsed = json.loads(detail)
-            msgs = parsed.get("errors") or []
-            if msgs:
-                die(msgs[0].get("message") or detail)
-        except json.JSONDecodeError:
-            pass
-        die(f"HTTP {e.code}: {detail[:400]}")
-    except urllib.error.URLError as e:
-        die(str(e))
-
-    if not payload.get("success"):
-        errs = payload.get("errors") or []
-        if errs:
-            die(errs[0].get("message") or json.dumps(errs))
-        die(json.dumps(payload))
-    return payload
-
-
-def get_account_id(token: str) -> str:
-    env_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
-    if env_id:
-        return env_id
-
-    proc = subprocess.run(
-        ["npx", "wrangler", "whoami"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    out = proc.stdout + proc.stderr
-    m = re.search(r"Account ID[:\s]+([0-9a-f]{32})", out, re.I)
-    if m:
-        return m.group(1)
-
-    data = api_request(token, "GET", "/accounts?per_page=50")
-    results = data.get("result") or []
-    if not results:
-        die("无法获取 Cloudflare Account ID")
-    if len(results) == 1:
-        return results[0]["id"]
-    die("多个 Cloudflare 账户，请设置 CLOUDFLARE_ACCOUNT_ID")
-
-
-def find_zone(token: str, zone_name: str) -> dict[str, Any]:
-    path = f"/zones?name={urllib.parse.quote(zone_name)}&status=active&per_page=1"
-    data = api_request(token, "GET", path)
-    zones = data.get("result") or []
-    if not zones:
-        die(f"域名 {zone_name} 不在当前 Cloudflare 账户中（或 zone 未激活）")
-    zone = zones[0]
-    if zone.get("name") != zone_name:
-        die(f"Zone 匹配异常: 期望 {zone_name}，得到 {zone.get('name')}")
-    return zone
-
-
-def hostname_in_zone(hostname: str, zone_name: str) -> bool:
-    return hostname == zone_name or hostname.endswith("." + zone_name)
-
-
-def bind_custom_domain(
-    token: str,
-    account_id: str,
-    worker_name: str,
-    hostname: str,
-    zone_id: str,
-    zone_name: str,
-) -> None:
-    worker_url = f"/accounts/{account_id}/workers/scripts/{worker_name}"
-    origins = [{"hostname": hostname, "zone_id": zone_id, "zone_name": zone_name}]
-    body = {
-        "override_scope": True,
-        "override_existing_origin": True,
-        "override_existing_dns_record": True,
-        "origins": origins,
-    }
-    api_request(token, "PUT", f"{worker_url}/domains/records", body)
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Bind auth hostname to pauth Worker")
-    parser.add_argument("--hostname", required=True, help="e.g. auth.kass.cc")
-    parser.add_argument("--zone-name", required=True, help="e.g. kass.cc")
-    parser.add_argument("--worker-name", default="passkey-auth")
-    parser.add_argument("--verify-only", action="store_true")
-    args = parser.parse_args()
-
-    hostname = args.hostname.strip().lower()
-    zone_name = args.zone_name.strip().lower()
-    if not hostname_in_zone(hostname, zone_name):
-        die(f"{hostname} 不是 {zone_name} 下的域名")
-
-    token = load_api_token()
-    account_id = get_account_id(token)
-    zone = find_zone(token, zone_name)
-    zone_id = zone["id"]
-
-    if args.verify_only:
-        print(f"OK zone={zone_name} id={zone_id}")
-        return 0
-
-    bind_custom_domain(token, account_id, args.worker_name, hostname, zone_id, zone_name)
-    print(f"BOUND {hostname} -> {args.worker_name}")
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
-PY
-
-  chmod +x "$HELPER_DIR/lib/wrangler-config.py" "$HELPER_DIR/lib/bind-custom-domain.py"
-  CONFIG_PY="$HELPER_DIR/lib/wrangler-config.py"
-  BIND_DOMAIN_PY="$HELPER_DIR/lib/bind-custom-domain.py"
-  trap 'rm -rf "$HELPER_DIR"' EXIT
+resolve_account_id() {
+  [[ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]] && return 0
+  CLOUDFLARE_ACCOUNT_ID="$(python3 -c "
+import re, sys
+for line in sys.stdin.read().splitlines():
+    for part in line.split('│'):
+        part = part.strip()
+        if re.fullmatch(r'[0-9a-f]{32}', part):
+            print(part)
+            raise SystemExit(0)
+" <<<"${WRANGLER_WHOAMI:-}")"
+  [[ -n "$CLOUDFLARE_ACCOUNT_ID" ]] || die "无法解析 Account ID；请 export CLOUDFLARE_ACCOUNT_ID=<32位 hex>"
+  export CLOUDFLARE_ACCOUNT_ID
 }
 
 prompt() {
@@ -521,6 +199,7 @@ wrangler_config_py() {
     --d1-id "$D1_ID" \
     --kv-id "$KV_ID" \
     --kv-preview-id "$KV_PREVIEW_ID" \
+    --account-id "${CLOUDFLARE_ACCOUNT_ID:-}" \
     "$@"
 }
 
@@ -542,12 +221,30 @@ load_vars_from_wrangler() {
   local file="$1"
   [[ -f "$file" ]] || return 0
   python3 -c "
-import json, re, sys
+import json, sys
 from pathlib import Path
+
+def strip_jsonc_comments(text: str) -> str:
+    out, i = [], 0
+    in_string = escape = False
+    while i < len(text):
+        ch = text[i]
+        if in_string:
+            out.append(ch)
+            if escape: escape = False
+            elif ch == '\\\\': escape = True
+            elif ch == '\"': in_string = False
+            i += 1; continue
+        if ch == '\"':
+            in_string = True; out.append(ch); i += 1; continue
+        if ch == '/' and i + 1 < len(text) and text[i + 1] == '/':
+            while i < len(text) and text[i] not in '\\n': i += 1
+            continue
+        out.append(ch); i += 1
+    return ''.join(out)
+
 p = Path(sys.argv[1])
-text = p.read_text()
-text = '\n'.join(re.sub(r'//.*$', '', line) for line in text.splitlines())
-cfg = json.loads(text)
+cfg = json.loads(strip_jsonc_comments(p.read_text(encoding='utf-8')))
 vars = cfg.get('vars') or {}
 routes = cfg.get('routes') or [{}]
 route = routes[0] if routes else {}
@@ -836,12 +533,16 @@ fi
 [[ ${#SESSION_SECRET} -ge 32 ]] || die "SESSION_SECRET 至少 32 字符"
 
 info "检查 Wrangler 登录…"
-npx wrangler whoami >/dev/null 2>&1 || die "请先 npx wrangler login 或设置 CLOUDFLARE_API_TOKEN"
-npx wrangler whoami
+warn_stale_ca_certs
+WRANGLER_WHOAMI="$(npx wrangler whoami 2>&1)" || die "请先 npx wrangler login 或设置 CLOUDFLARE_API_TOKEN"
+printf '%s\n' "$WRANGLER_WHOAMI"
+resolve_account_id
+info "Account ID: ${CLOUDFLARE_ACCOUNT_ID}"
 
 verify_auth_zone
 
 cd "$INSTALL_DIR"
+refresh_helpers_from_install_dir
 
 # ── D1 / KV ────────────────────────────────────────────────────────────────
 
@@ -890,9 +591,11 @@ create_kv() {
     out="$(npx wrangler kv namespace create "$title" 2>&1)"
   fi
   id="$(printf '%s' "$out" | python3 -c "
-import re,sys
-t=sys.stdin.read()
-m=re.search(r'\"id\":\s*\"([a-f0-9]{32})\"',t) or re.search(r\"id\s*=\s*['\\\"]([a-f0-9]{32})['\\\"]\",t)
+import re, sys
+t = sys.stdin.read()
+m = re.search(r'\"(?:id|preview_id)\":\s*\"([a-f0-9]{32})\"', t)
+if not m:
+    m = re.search(r\"id\s*=\s*['\\\"]([a-f0-9]{32})['\\\"]\", t)
 print(m.group(1) if m else '')
 ")"
   [[ -n "$id" ]] || die "KV 创建失败: $out"
@@ -972,6 +675,7 @@ ORIGIN=${ORIGIN}
 D1_ID=${D1_ID}
 KV_ID=${KV_ID}
 KV_PREVIEW_ID=${KV_PREVIEW_ID}
+CLOUDFLARE_ACCOUNT_ID=${CLOUDFLARE_ACCOUNT_ID:-}
 EOF
 chmod 600 "$INSTALL_DIR/.deploy-cloudflare.env" 2>/dev/null || true
 
@@ -1012,5 +716,4 @@ fi
 
 bind_auth_domain
 
-  bind_auth_domain
 }
