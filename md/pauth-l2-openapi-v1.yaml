@@ -6,7 +6,9 @@ info:
     OpenAPI specification for the implemented pauth authentication model.
 
     - L1: gateway forward-auth (`GET /api/verify`)
-    - OAuth: app login (`/api/l2/authorize`, `/api/l2/token`, `/api/l2/userinfo`)
+    - OAuth L2: app login (`/api/l2/authorize`, `/api/l2/token`, `/api/l2/userinfo`)
+    - Social login: Google / Microsoft (`/api/oauth/*`)
+    - Passkey delegate: admin-assisted device registration (`/api/passkey-delegate/*`)
     - Admin: clients, users, L1 permissions, invites, backup, integration (`/api/admin/*`)
 
     All active pauth users may OAuth into registered clients. Per-app authorization is managed by each application.
@@ -21,6 +23,9 @@ tags:
   - name: System
   - name: L1
   - name: OAuth
+  - name: SocialOAuth
+  - name: PasskeyDelegate
+  - name: Session
   - name: Admin
 
 paths:
@@ -163,6 +168,132 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+
+  /api/login/logout:
+    post:
+      tags: [Session]
+      summary: End session
+      description: Deletes D1 session and clears `sid` cookie.
+      security:
+        - cookieSid: []
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+
+  /api/passkey-delegate/{token}:
+    get:
+      tags: [PasskeyDelegate]
+      summary: Passkey delegate link metadata
+      parameters:
+        - in: path
+          name: token
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PasskeyDelegateInfo"
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/passkey-delegate/{token}/options:
+    post:
+      tags: [PasskeyDelegate]
+      summary: WebAuthn registration options for delegate link
+      parameters:
+        - in: path
+          name: token
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Registration options + challengeId
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/passkey-delegate/{token}/verify:
+    post:
+      tags: [PasskeyDelegate]
+      summary: Complete Passkey registration via delegate link
+      parameters:
+        - in: path
+          name: token
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkMessageResponse"
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/oauth/google/public-status:
+    get:
+      tags: [SocialOAuth]
+      summary: Whether Google login is enabled
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthPublicStatus"
+
+  /api/oauth/microsoft/public-status:
+    get:
+      tags: [SocialOAuth]
+      summary: Whether Microsoft login is enabled
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthPublicStatus"
+
+  /api/oauth/google/start:
+    get:
+      tags: [SocialOAuth]
+      summary: Start Google OAuth (browser redirect)
+      parameters:
+        - in: query
+          name: mode
+          schema: { type: string, enum: [login, bind] }
+        - in: query
+          name: next
+          schema: { type: string }
+      responses:
+        "302":
+          description: Redirect to Google
+
+  /api/oauth/microsoft/start:
+    get:
+      tags: [SocialOAuth]
+      summary: Start Microsoft OAuth (browser redirect)
+      parameters:
+        - in: query
+          name: mode
+          schema: { type: string, enum: [login, bind] }
+        - in: query
+          name: next
+          schema: { type: string }
+      responses:
+        "302":
+          description: Redirect to Microsoft
 
   /api/admin/config:
     get:
@@ -545,6 +676,26 @@ components:
       properties:
         ok: { type: boolean, const: true }
 
+    OkMessageResponse:
+      type: object
+      required: [ok, message]
+      properties:
+        ok: { type: boolean, const: true }
+        message: { type: string }
+
+    PasskeyDelegateInfo:
+      type: object
+      required: [name, valid]
+      properties:
+        name: { type: string }
+        valid: { type: boolean, const: true }
+
+    OAuthPublicStatus:
+      type: object
+      required: [enabled]
+      properties:
+        enabled: { type: boolean }
+
     SystemState:
       type: object
       required: [state, registrationEnabled, origin]
@@ -656,7 +807,7 @@ components:
         l1Enabled: { type: boolean }
         isRoot:
           type: boolean
-          description: True for bootstrap admin (name root); cannot rename/disable/delete
+          description: Computed — true for bootstrap admin (earliest-created admin, name root); cannot rename/disable/delete
         googleEnabled: { type: boolean }
         googleLinked: { type: boolean }
         microsoftEnabled: { type: boolean }

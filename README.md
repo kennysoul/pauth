@@ -4,7 +4,9 @@ Central Passkey authentication for `*.xxx.com` (v3).
 
 ## Requirements
 
-- Node.js 20+ (Wrangler 3 for local dev on Node 20; upgrade to Node 22+ and `wrangler@4` for production deploy)
+- Node.js 20+ (`package.json` `engines.node`: `>=20.9.0`)
+- **Current lockfile**: Wrangler 3 (`wrangler@^3`) — used by `npm run dev` / `npm run deploy`
+- **Production optional upgrade**: Node 22+ and `wrangler@4` (update `package.json` when you adopt it)
 
 ## Local development
 
@@ -16,6 +18,8 @@ cp .dev.vars.example .dev.vars
 ```
 
 Edit `wrangler.local.jsonc` (gitignored) with your values. Do **not** put real domains or resource IDs in `wrangler.jsonc`.
+
+For **API-only local smoke tests** on `http://127.0.0.1:8787`, you may set `RP_ID=localhost`, `ORIGIN=http://127.0.0.1:8787`, and leave `COOKIE_DOMAIN` empty. The template `wrangler.local.jsonc.example` uses `example.com` placeholders to mirror production layout. Passkey flows in a real browser typically need a stable hostname (reverse proxy or dev domain), not bare `127.0.0.1`.
 
 2. Install, migrate, build, and run:
 
@@ -41,7 +45,7 @@ Open `https://auth.<your-domain>/setup` (via your reverse proxy) or http://127.0
 
 | Page | Purpose |
 |------|---------|
-| 用户管理 | Users, open registration toggle, L1 grants, Passkey/OAuth per user |
+| 用户管理 | Users, open registration toggle, L1 grants, Passkey/OAuth per user, Passkey delegate links |
 | 应用管理 | OAuth clients (L2 / L1+L2) |
 | 集成与安全 | Google / Microsoft OAuth, WEBAUTH runtime display |
 | 系统设置 | Encrypted backup export/import, factory reset |
@@ -62,6 +66,16 @@ Admin **系统设置 → 加密备份**:
 - **Import:** file + password → preview → confirm; replaces all non-root users, clients, and settings
 
 API: `POST /api/admin/backup/export|preview|import` (admin session required).
+
+### Session API
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/api/login/logout` | End session; clear `sid` cookie (admin UI uses this) |
+
+### Passkey delegate (admin-assisted registration)
+
+Admins generate a one-time link from **用户管理 → Passkey → 代注册**. User opens `/link-device?t=<token>` and registers a Passkey via `/api/passkey-delegate/:token/*`.
 
 ### Smoke test (API only)
 
