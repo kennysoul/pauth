@@ -533,7 +533,15 @@ Then `POST /api/setup/passkey/options` → browser Passkey → `POST /api/setup/
 
 Admin creates a one-time link from **用户管理 → Passkey → 代注册**:
 
-`POST /api/admin/users/:id/passkeys/delegate` → `{ "url": "https://auth.example.com/link-device?t=...", "expiresIn": 600 }`
+`POST /api/admin/users/:id/passkeys/delegate`
+
+```json
+{
+  "token": "abc123...",
+  "link": "https://auth.example.com/link-device?t=abc123...",
+  "expiresIn": 600
+}
+```
 
 User opens the link; browser calls:
 

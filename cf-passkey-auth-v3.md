@@ -442,7 +442,7 @@ function isAllowedReturnTo(url: string, env: Env): boolean {
 // /login 页面
 async function handleLogin(returnTo: string | null) {
   const { options, challengeId } = await fetch('/api/login/options', { method: 'POST' }).then(r => r.json());
-  const authResp = await startAuthentication({ optionsJSON: options.options });
+  const authResp = await startAuthentication({ optionsJSON: options });
   const res = await fetch('/api/login/verify', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

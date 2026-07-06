@@ -108,7 +108,7 @@ Admin generates a one-time link from **用户管理 → Passkey → 代注册**.
 | POST | `/api/passkey-delegate/:token/options` | — | WebAuthn registration options |
 | POST | `/api/passkey-delegate/:token/verify` | — | Add Passkey to target user; invalidates token |
 
-Admin: `POST /api/admin/users/:id/passkeys/delegate` → `{ url, expiresIn, ... }`  
+Admin: `POST /api/admin/users/:id/passkeys/delegate` → `{ token, link, expiresIn }`  
 Frontend: `/link-device?t=<token>`
 
 ---
