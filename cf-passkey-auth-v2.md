@@ -1,6 +1,26 @@
 # Cloudflare Workers + Pages + D1 Passkey 认证系统 v2
 
-> **已过时**：当前实现见 `cf-passkey-auth-v3.md`、`README.md` 与 `md/pauth-l1-l2-upgrade-plan-and-spec.md`。本文档保留作历史参考。
+> ## DEPRECATED — 请勿作为当前实现参考
+>
+> 本文档描述 **v2 历史方案**，与仓库内代码 **不一致**。请改用：
+>
+> - [`cf-passkey-auth-v3.md`](cf-passkey-auth-v3.md) — 当前 Passkey + Forward Auth 设计
+> - [`README.md`](README.md) — 部署与 Caddy 集成
+> - [`md/pauth-l1-l2-upgrade-plan-and-spec.md`](md/pauth-l1-l2-upgrade-plan-and-spec.md) — L1/L2 OAuth 规范
+>
+> **与 v3 的关键差异：**
+>
+> | 项目 | v2（本文） | v3（当前） |
+> |------|------------|------------|
+> | 状态机 | `UNINITIALIZED` / `BOOTSTRAP` / `ACTIVE` | `NEEDS_SETUP` / `ACTIVE` |
+> | 会话 | JWT Bearer | HttpOnly Cookie（`sid`） |
+> | Bootstrap | 多步 `/api/setup/init` + 自定义管理员名 | `/api/setup/begin` 固定 `root` |
+> | 注册 API | `/api/register/options` + `/result` | `/api/register/begin` + `/passkey/*` |
+> | 审批 | 可关闭（`requireApproval`） | **永远审批**（硬编码） |
+> | 子域接入 | 未定义 | Caddy Forward Auth + `GET /api/verify` |
+> | 登出 | 未统一 | `POST /api/login/logout` |
+
+> 下文保留作历史参考。
 
 > 新增功能：管理员引导注册（Bootstrap）、注册开关+审批、管理员后台（用户管理/系统重置）
 

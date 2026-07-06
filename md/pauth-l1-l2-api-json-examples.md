@@ -2,6 +2,8 @@
 
 Request/response examples for the implemented pauth authentication model.
 
+**Route index:** [`docs/API.md`](../docs/API.md)
+
 Base URL (replace with your deployment `ORIGIN`):
 
 ```text
@@ -343,8 +345,7 @@ Optional query: `?status=pending|active|disabled` (omit or `all` for every user)
 ]
 ```
 
-Bootstrap admin is always `name: "root"` with `isRoot: true`. Open registration is toggled via `PATCH /api/admin/config` from **用户管理** (same API as before; UI moved from 系统设置).
-```
+Bootstrap admin is always `name: "root"` with `isRoot: true` (computed in API — earliest-created admin). Open registration is toggled via `PATCH /api/admin/config` from **用户管理** (same API as before; UI moved from 系统设置).
 
 ### 7.2 Update user: `PATCH /api/admin/users/:id`
 
@@ -528,7 +529,59 @@ Then `POST /api/setup/passkey/options` → browser Passkey → `POST /api/setup/
 
 ---
 
-## 12) Integrator notes
+## 12) Passkey delegate (admin-assisted registration)
+
+Admin creates a one-time link from **用户管理 → Passkey → 代注册**:
+
+`POST /api/admin/users/:id/passkeys/delegate`
+
+```json
+{
+  "token": "abc123...",
+  "link": "https://auth.example.com/link-device?t=abc123...",
+  "expiresIn": 600
+}
+```
+
+User opens the link; browser calls:
+
+### 12.1 Metadata: `GET /api/passkey-delegate/:token`
+
+```json
+{
+  "name": "Alice",
+  "valid": true
+}
+```
+
+### 12.2 Register: `POST /api/passkey-delegate/:token/options` → browser → `POST .../verify`
+
+Success:
+
+```json
+{
+  "ok": true,
+  "message": "Passkey 添加成功"
+}
+```
+
+---
+
+## 13) Logout
+
+`POST /api/login/logout` (session cookie required)
+
+```json
+{
+  "ok": true
+}
+```
+
+Clears `sid` cookie and deletes the D1 session row.
+
+---
+
+## 14) Integrator notes
 
 - **`state`** is required; verify it in your callback handler.
 - **`redirect_uri`** must match exactly between authorize and token requests. Any HTTPS URL is accepted (no per-client registration).
@@ -541,7 +594,7 @@ Then `POST /api/setup/passkey/options` → browser Passkey → `POST /api/setup/
 
 ---
 
-## 13) Error code reference
+## 15) Error code reference
 
 | HTTP | error | Typical cause |
 |------|-------|----------------|

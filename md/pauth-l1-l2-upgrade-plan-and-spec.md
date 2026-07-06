@@ -2,6 +2,8 @@
 
 This document describes the authentication model and the current implementation in pauth.
 
+**API route index:** [`docs/API.md`](../docs/API.md)
+
 ---
 
 ## 1) Architecture
@@ -105,6 +107,16 @@ Admin UI shows `access_mode` as **「需 L1 网关」** checkbox (`L1_AND_L2` = 
 | GET | `/api/invite/:token` | Invite metadata |
 | POST | `/api/invite/:token/begin` | Start invite registration session |
 | POST | `/api/invite/:token/passkey/*` | Passkey registration for invite |
+| GET | `/api/passkey-delegate/:token` | Passkey delegate link metadata |
+| POST | `/api/passkey-delegate/:token/options` | WebAuthn registration options (delegate) |
+| POST | `/api/passkey-delegate/:token/verify` | Complete delegate Passkey registration |
+| GET | `/api/oauth/google/public-status` | Whether Google login is enabled |
+| GET | `/api/oauth/microsoft/public-status` | Whether Microsoft login is enabled |
+| GET | `/api/oauth/google/start` | Start Google OAuth (login or bind) |
+| GET | `/api/oauth/google/callback` | Google OAuth callback |
+| GET | `/api/oauth/microsoft/start` | Start Microsoft OAuth |
+| GET | `/api/oauth/microsoft/callback` | Microsoft OAuth callback |
+| POST | `/api/login/logout` | End session |
 
 ### 3.2 Admin (`/api/admin/*`, admin session required)
 
@@ -116,7 +128,7 @@ Admin UI shows `access_mode` as **「需 L1 网关」** checkbox (`L1_AND_L2` = 
 | PATCH | `/users/:id` | Update `name` / `status` (root protected) |
 | DELETE | `/users/:id` | Delete user (root protected) |
 | PUT | `/users/:id/permissions` | Set `{ l1Enabled }` |
-| GET/POST/DELETE | `/users/:id/passkeys/*` | Passkey list, delegate link, delete |
+| GET/POST/DELETE | `/users/:id/passkeys/*` | Passkey list, delegate link (`POST .../delegate` → `/link-device?t=`), delete |
 | POST/DELETE | `/users/:id/google-*`, `/microsoft-*` | OAuth allow-list / unlink |
 | POST | `/invites` | Create user + invite URL |
 | GET/POST/PATCH/DELETE | `/clients` | OAuth client CRUD + secret rotate |
@@ -125,7 +137,9 @@ Admin UI shows `access_mode` as **「需 L1 网关」** checkbox (`L1_AND_L2` = 
 | GET | `/audit-logs` | Audit log query |
 | POST | `/system/reset` | Factory reset |
 
-Admin UI pages: **用户管理** (incl. open registration), **应用管理**, **集成与安全**, **系统设置** (backup + reset), **审计日志**.
+Admin UI pages: **用户管理** (incl. open registration), **应用管理**, **集成与安全**, **系统设置** (backup + reset), **审计日志** (`/admin/logs`).
+
+Frontend routes: `/invite/:token`, `/link-device?t=<token>`.
 
 ### 3.3 Root bootstrap admin
 
@@ -217,6 +231,7 @@ Passkey authentication happens on the auth host during the authorize flow; the a
 | Google / Microsoft social login | Done |
 | Admin client CRUD + secret management | Done |
 | Admin user L1 + invites + Passkey delegate | Done |
+| Passkey delegate UI (`/link-device`) | Done |
 | Encrypted backup (root excluded) | Done |
 | Root admin protection | Done |
 | Deploy bootstrap script + domain bind | Done |
@@ -233,7 +248,7 @@ Passkey authentication happens on the auth host during the authorize flow; the a
 - [x] `L1_AND_L2` client blocks users without L1
 - [x] Disabling user blocks next authorize/token
 - [x] Root admin cannot be renamed/disabled/deleted; backup excludes root
-- [ ] Audit log filters by layer/client (basic logging exists; filtered UI TBD)
+- [ ] Audit log filters by layer/client — **out of scope v1** (basic list at `/admin/logs` exists; filtered UI TBD)
 
 ---
 

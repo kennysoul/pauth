@@ -2,7 +2,7 @@
 
 > **Workers + Assets + D1 + KV** · 中央认证 `auth.xxx.com` · **`.xxx.com` 共享 Cookie** · **Caddy Forward Auth** · **永远审批**
 
-> **pauth 扩展**：OAuth（`/api/l2/*`）、L1 网关权限、Google/Microsoft 社交登录、加密备份、部署脚本等见 `README.md` 与 `md/pauth-l1-l2-upgrade-plan-and-spec.md`。
+> **pauth 扩展**：OAuth L2（`/api/l2/*`）、社交登录（`/api/oauth/*`）、L1 网关权限、Passkey 代注册、加密备份、部署脚本等见 `README.md`、**[`docs/API.md`](docs/API.md)**（路由索引）、`md/pauth-l1-l2-upgrade-plan-and-spec.md`、`md/pauth-l1-l2-api-json-examples.md`、`md/pauth-l2-openapi-v1.yaml`。
 
 ---
 
@@ -23,7 +23,7 @@
 
 - 跨 apex 域（如 `yyy.com`）
 - 按用户分配「可访问哪个子域」（审批通过 + L1 授权即全站有效）
-- OAuth / 应用级登录细节（见 `md/` 规范文档）
+- OAuth **应用侧**集成细节（pauth 已实现 L2 IdP 与社交登录；应用如何接 callback、管角色见 `md/` 规范）
 
 ---
 
@@ -51,9 +51,9 @@
        │
        ├─► app.xxx.com ──► Caddy forward_auth ──► GET auth.xxx.com/api/verify
        │                         │                        │
-       │                    401 │                   200 + X-Auth-*
+       │                    302 │                   200 + X-Auth-*
        │                         ▼                        ▼
-       │              302 auth.xxx.com/login      反代业务内容
+       │              auth.xxx.com/login        反代业务内容
        │
        └─► auth.xxx.com/login ── Passkey ── Set-Cookie .xxx.com ── 302 回 app
 ```
@@ -79,11 +79,11 @@
 ```text
 1. 用户打开 https://app.xxx.com/dashboard
 2. Caddy 将请求（含 Cookie）转发到 auth.xxx.com/api/verify
-3. verify 返回 401
-4. Caddy 302 → https://auth.xxx.com/login?return_to=https://app.xxx.com/dashboard
+3. verify 返回 302 → https://auth.xxx.com/login?return_to=https://app.xxx.com/dashboard
+4. Caddy 跟随重定向（浏览器进入 auth 登录页）
 5. 用户在 auth 看到登录页，点击「Passkey 登录」→ 浏览器弹出 Passkey
 6. 登录成功，Set-Cookie: sid=...; Domain=.xxx.com
-7. 302 回到 https://app.xxx.com/dashboard
+7. 前端跳回 https://app.xxx.com/dashboard
 8. forward_auth → verify 200 → 用户看到业务页面
 ```
 
@@ -159,7 +159,8 @@ NEEDS_SETUP  ── 首个管理员 Passkey 注册成功 ──►  ACTIVE
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
-    "not_found_handling": "single-page-application"
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true
   },
 
   "d1_databases": [{
@@ -172,6 +173,12 @@ NEEDS_SETUP  ── 首个管理员 Passkey 注册成功 ──►  ACTIVE
   "kv_namespaces": [{
     "binding": "CHALLENGES",
     "id": "<YOUR_KV_ID>"
+  }],
+
+  "routes": [{
+    "pattern": "auth.xxx.com",
+    "zone_name": "xxx.com",
+    "custom_domain": true
   }],
 
   "observability": { "enabled": true }
@@ -229,7 +236,7 @@ CREATE TABLE sessions (
   id         TEXT PRIMARY KEY,
   user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   kind       TEXT NOT NULL DEFAULT 'normal'
-               CHECK (kind IN ('normal', 'setup')),
+               CHECK (kind IN ('normal', 'setup', 'register')),
   expires_at TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -247,6 +254,17 @@ CREATE TABLE audit_logs (
 CREATE INDEX idx_audit_created ON audit_logs(created_at DESC);
 ```
 
+**后续迁移**（L1/L2、社交登录、代注册等，见 `migrations/`）：
+
+| 迁移 | 主要表 / 变更 |
+|------|----------------|
+| `0002_l1_l2_clients.sql` | `clients`, `user_l1_access`, `user_client_access`, `invites` |
+| `0003_l2_oauth.sql` | `auth_codes`, `access_tokens` |
+| `0004_client_secret_plain.sql` | `clients.client_secret` |
+| `0005_social_oauth.sql` | `settings`, `oauth_identities`, `users.allowed_*_email` |
+| `0006_passkey_delegate.sql` | `passkey_delegate_tokens` |
+| `0007_root_admin_name.sql` | 将首个 admin 显示名统一为 `root` |
+
 **审批策略（硬编码，无 DB 开关）**
 
 - Bootstrap 管理员：`status = active`（否则系统无法启动）
@@ -260,7 +278,8 @@ CREATE INDEX idx_audit_created ON audit_logs(created_at DESC);
 | Cookie | 场景 | 属性 |
 |--------|------|------|
 | `sid` | 正式会话 | `HttpOnly; Secure; SameSite=Lax; Path=/; Domain=.xxx.com; Max-Age=604800` |
-| `setup_sid` | Bootstrap / 注册中间态 | `Domain=.xxx.com; Path=/api/setup` 或 `/api/register`; `Max-Age=600` |
+| `setup_sid` | Bootstrap 中间态 | `Domain=.xxx.com; Path=/api/setup; Max-Age=600` |
+| `reg_sid` | 自注册 / 邀请注册中间态 | `Domain=.xxx.com; Path=/api; Max-Age=600` |
 
 Cookie 值 = `sessionId` + HMAC；权威数据在 D1 `sessions`。
 
@@ -270,10 +289,28 @@ Cookie 值 = `sessionId` + HMAC；权威数据在 D1 `sessions`。
 
 ## 9. API 路由
 
+完整路由索引（按模块、鉴权要求）：**[`docs/API.md`](../docs/API.md)**。
+
 ```text
 公开
 ├── GET  /api/system/state
 ├── GET  /api/verify                    ★ Caddy Forward Auth（见 §10）
+├── GET  /api/l2/authorize
+├── POST /api/l2/token
+├── GET  /api/l2/userinfo
+├── GET  /api/invite/:token
+├── POST /api/invite/:token/begin
+├── POST /api/invite/:token/passkey/options
+├── POST /api/invite/:token/passkey/verify
+├── GET  /api/passkey-delegate/:token
+├── POST /api/passkey-delegate/:token/options
+├── POST /api/passkey-delegate/:token/verify
+├── GET  /api/oauth/google/public-status
+├── GET  /api/oauth/microsoft/public-status
+├── GET  /api/oauth/google/start
+├── GET  /api/oauth/google/callback
+├── GET  /api/oauth/microsoft/start
+├── GET  /api/oauth/microsoft/callback
 ├── POST /api/setup/begin
 ├── POST /api/setup/passkey/options
 ├── POST /api/setup/passkey/verify
@@ -282,7 +319,7 @@ Cookie 值 = `sessionId` + HMAC；权威数据在 D1 `sessions`。
 ├── POST /api/register/passkey/verify
 ├── POST /api/login/options
 ├── POST /api/login/verify
-└── POST /api/logout
+└── POST /api/login/logout
 
 用户（sid + active）
 ├── GET    /api/me
@@ -300,6 +337,7 @@ Cookie 值 = `sessionId` + HMAC；权威数据在 D1 `sessions`。
 ├── DELETE /api/admin/users/:id
 ├── PUT    /api/admin/users/:id/permissions   { l1Enabled }
 ├── GET/POST/DELETE /api/admin/users/:id/passkeys/*
+├── POST   /api/admin/users/:id/passkeys/delegate
 ├── POST/DELETE /api/admin/users/:id/google-* / microsoft-*
 ├── GET/POST/PATCH/DELETE /api/admin/clients
 ├── POST   /api/admin/clients/:id/regenerate-secret
@@ -310,8 +348,8 @@ Cookie 值 = `sessionId` + HMAC；权威数据在 D1 `sessions`。
 └── POST   /api/admin/system/reset
 
 静态：/* → ASSETS（SPA）
-页面：/setup · /login · /register · /admin/*
-  用户管理 · 应用管理 · 集成与安全 · 系统设置 · 审计日志
+页面：/setup · /login · /register · /invite/:token · /link-device · /admin/*
+  用户管理 · 应用管理 · 集成与安全 · 系统设置 · 审计日志（/admin/logs）
 ```
 
 ### GET /api/system/state
@@ -372,13 +410,19 @@ https://auth.xxx.com/login?return_to=https://app.xxx.com/dashboard
 
 **return_to 白名单**（防 open redirect）：
 
+- 生产：`https://` 且 hostname 为 `RP_ID` 或其子域（如 `xxx.com`、`app.xxx.com`）
+- 本地 dev：允许与 `ORIGIN` **同协议**（如 `http://localhost:8787`），见 `src/lib/return-to.ts`
+
 ```typescript
 function isAllowedReturnTo(url: string, env: Env): boolean {
   try {
     const u = new URL(url);
-    if (u.protocol !== 'https:') return false;
-    // hostname === xxx.com 或 *.xxx.com
-    const base = env.RP_ID; // xxx.com
+    const origin = new URL(env.ORIGIN);
+    if (u.protocol !== origin.protocol) return false;
+    const base = env.RP_ID; // xxx.com 或 localhost
+    if (base === 'localhost') {
+      return u.hostname === 'localhost' && u.port === origin.port;
+    }
     return u.hostname === base || u.hostname.endsWith('.' + base);
   } catch {
     return false;
@@ -390,22 +434,23 @@ function isAllowedReturnTo(url: string, env: Env): boolean {
 
 1. 校验用户 `status === 'active'`
 2. 写 D1 session，Set-Cookie `sid`（`Domain=.xxx.com`）
-3. 若 `return_to` 合法 → `302` 到该 URL；否则 → `/admin` 或 `/`
+3. 返回 JSON `{ ok: true, redirect: "<url>" }`；前端 `window.location.href = redirect`（非 HTTP 302）
 
 ### 登录 UI（前端）
 
 ```typescript
 // /login 页面
 async function handleLogin(returnTo: string | null) {
-  const opts = await fetch('/api/login/options', { method: 'POST' }).then(r => r.json());
-  const authResp = await startAuthentication({ optionsJSON: opts });
+  const { options, challengeId } = await fetch('/api/login/options', { method: 'POST' }).then(r => r.json());
+  const authResp = await startAuthentication({ optionsJSON: options });
   const res = await fetch('/api/login/verify', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...authResp, returnTo }),
+    body: JSON.stringify({ challengeId, authenticationResponse: authResp, returnTo }),
   });
-  if (res.redirected) window.location.href = res.url;
-  else if (res.ok) window.location.href = returnTo ?? '/admin';
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error);
+  window.location.href = data.redirect ?? '/admin';
 }
 ```
 
@@ -460,34 +505,41 @@ POST /api/login/options   → KV challenge（discoverable，无 allowCredentials
 POST /api/login/verify    → 验 Passkey · 更新 counter
   拒绝 pending/disabled
   INSERT session · Set-Cookie sid Domain=.xxx.com
-  302 return_to（若合法）
+  JSON { redirect }（若 return_to 合法则用其，否则 /admin 或 /login）
 ```
 
 ### 12.4 登出
 
 ```text
-POST /api/logout → DELETE session · Clear sid cookie
+POST /api/login/logout → DELETE session · Clear sid cookie
 ```
 
 ---
 
 ## 13. Caddy 配置
 
-### 13.1 保护业务子域
+> **推荐配置见 `README.md`「Caddy integration」**：使用 `route { forward_auth; reverse_proxy }`，并在 `forward_auth` 中去掉 `Sec-Fetch-*` 头。以下为备选/简化示例。
+
+### 13.1 保护业务子域（备选：@anonymous 兜底）
 
 ```caddyfile
 app.xxx.com {
-  forward_auth auth.xxx.com {
-    uri /api/verify
-    copy_headers X-Auth-User-Id X-Auth-User-Email X-Auth-User-Name X-Auth-User-Role
+  route {
+    forward_auth https://auth.xxx.com {
+      uri /api/verify
+      header_up Host auth.xxx.com
+      header_up Cookie {http.request.header.Cookie}
+      header_up X-Forwarded-Proto {scheme}
+      header_up X-Forwarded-Host {http.request.hostport}
+      header_up X-Forwarded-Uri {uri}
+      header_up -Sec-Fetch-Mode
+      header_up -Sec-Fetch-Dest
+      header_up -Sec-Fetch-Site
+      header_up -Sec-Fetch-User
+      copy_headers X-Auth-User-Id X-Auth-User-Email X-Auth-User-Name X-Auth-User-Role
+    }
+    reverse_proxy 127.0.0.1:8080
   }
-
-  @anonymous not header X-Auth-User-Id *
-  handle @anonymous {
-    redir https://auth.xxx.com/login?return_to={scheme}://{host}{uri} 302
-  }
-
-  reverse_proxy 127.0.0.1:8080
 }
 ```
 
@@ -501,17 +553,11 @@ app.xxx.com {
     reverse_proxy 127.0.0.1:8080
   }
 
-  forward_auth auth.xxx.com {
-    uri /api/verify
-    copy_headers X-Auth-User-Id X-Auth-User-Email X-Auth-User-Name
-  }
-
-  @anonymous not header X-Auth-User-Id *
-  handle @anonymous {
-    redir https://auth.xxx.com/login?return_to={scheme}://{host}{uri} 302
-  }
-
-  handle {
+  route {
+    forward_auth https://auth.xxx.com {
+      uri /api/verify
+      copy_headers X-Auth-User-Id X-Auth-User-Email X-Auth-User-Name X-Auth-User-Role
+    }
     reverse_proxy 127.0.0.1:8080
   }
 }
@@ -583,7 +629,7 @@ generateAuthenticationOptions({
 | L1 网关 | `PUT /api/admin/users/:id/permissions` `{ "l1Enabled": true }` |
 | 邀请 | `POST /api/admin/invites` |
 
-**root 管理员**：setup 创建的首个 admin（`name: "root"`, `isRoot: true`），不可改名/禁用/删除；备份不含 root。
+**root 管理员**：setup 创建的首个 admin（`name: "root"`）；API 响应含计算字段 `isRoot: true`（最早创建的 admin，非 DB 列）。不可改名/禁用/删除；备份不含 root。
 
 禁用用户时 **DELETE 该用户全部 sessions**，verify 立即 302。
 
@@ -614,10 +660,13 @@ D1 batch：审计 → 清 sessions/passkeys/users/audit → `state=NEEDS_SETUP` 
 
 ```text
 passkey-auth/
+├── docs/API.md                   # API route index
 ├── wrangler.jsonc
 ├── wrangler.local.jsonc          # 本地部署（gitignore）
 ├── wrangler.production.jsonc     # Git Builds 模板
-├── scripts/deploy-cloudflare.sh  # npm run deploy:bootstrap
+├── scripts/full-deploy-cloudflare.sh   # npm run deploy:full / deploy:bootstrap
+├── scripts/provision-cloudflare.sh     # npm run provision:cloudflare
+├── scripts/deploy-cloudflare.sh        # badge/CI 薄封装（provision + deploy）
 ├── migrations/0001_init.sql … 0007_root_admin_name.sql
 ├── src/
 │   ├── index.ts
@@ -632,7 +681,7 @@ passkey-auth/
 │       ├── system.ts        # state + verify
 │       ├── setup.ts
 │       ├── register.ts / login.ts / me.ts
-│       ├── l2.ts / oauth.ts
+│       ├── l2.ts / oauth.ts / passkey-delegate.ts
 │       └── admin.ts + admin-backup.ts + admin-oauth.ts
 └── app/                     # SPA → dist/
     └── pages/admin/         # 用户/应用/集成/设置/审计
@@ -647,11 +696,13 @@ passkey-auth/
 | `/setup` | `NEEDS_SETUP` | root 管理员 Passkey，完成后不再出现 |
 | `/login` | `ACTIVE` | Passkey / 社交登录；支持 `?return_to=` |
 | `/register` | `ACTIVE` + 注册开启 | 注册后提示待审批 |
+| `/invite/:token` | 有效邀请 | 邀请用户注册 Passkey，完成后直接 `active` |
+| `/link-device` | 有效代注册链接 | 管理员生成的 Passkey 代注册页 |
 | `/admin/users` | admin + active | 用户、L1、邀请、开放注册 |
 | `/admin/clients` | admin + active | OAuth 应用管理 |
 | `/admin/integration` | admin + active | Google / Microsoft / WEBAUTH |
 | `/admin/config` | admin + active | 加密备份、系统重置 |
-| `/admin/audit` | admin + active | 审计日志 |
+| `/admin/logs` | admin + active | 审计日志 |
 
 根路由 loader：
 
@@ -674,7 +725,7 @@ if (state === 'ACTIVE' && path.startsWith('/setup')) redirect('/login');
 | Bootstrap 竞态 | D1 batch + 禁止重复 admin |
 | Setup/Register 隔离 | 独立路由 |
 | CSRF | SameSite=Lax + mutating 请求校验 Origin |
-| return_to | 仅 `https://*.xxx.com` |
+| return_to | 生产仅 `https://*.xxx.com`；本地 dev 允许与 `ORIGIN` 同协议 |
 | 重置 | 确认字符串 + admin + Origin |
 | 禁用 | 删 sessions |
 | 最后 admin | disable 时拒绝 |
@@ -685,13 +736,36 @@ if (state === 'ACTIVE' && path.startsWith('/setup')) redirect('/login');
 
 ## 19. 本地开发与部署
 
+### 本地开发 vars
+
+`wrangler.local.jsonc.example` 使用 `example.com` 占位符，便于对照生产配置。纯本地 API 冒烟可改为：
+
+```jsonc
+"RP_ID": "localhost",
+"ORIGIN": "http://127.0.0.1:8787",
+"COOKIE_DOMAIN": "",
+"AUTH_HOST": "127.0.0.1:8787"
+```
+
+Passkey 完整流程需真实浏览器；`RP_ID=localhost` 时 `return_to` 也须为 `http://localhost:8787/...`。
+
 ### 快速部署（推荐）
 
 ```bash
-npm run deploy:bootstrap
-# 或
-./scripts/deploy-cloudflare.sh --zone xxx.com --auth-host auth.xxx.com --dir ~/pauth --yes
+npm run deploy:full -- --yes auth.example.com
+# 等价
+npm run deploy:bootstrap -- --yes auth.example.com
+# 或直接
+./scripts/full-deploy-cloudflare.sh --yes auth.example.com
 ```
+
+**脚本分工**（与 README 一致）：
+
+| 命令 / 脚本 | 用途 |
+|-------------|------|
+| `npm run deploy:full` / `deploy:bootstrap` → `full-deploy-cloudflare.sh` | 全量：D1/KV + 配置 + 构建 + 迁移 + 部署 + 绑域 |
+| `npm run provision:cloudflare` → `provision-cloudflare.sh` | 仅资源与 wrangler 配置（badge 上半步） |
+| `scripts/deploy-cloudflare.sh` | 薄封装：provision + deploy（badge/CI 第二步） |
 
 脚本会：创建 D1 + KV → 写入 `wrangler.local.jsonc` → 上传 `SESSION_SECRET` → 远程迁移 → 部署 → 自动绑定 Custom Domain。
 
@@ -701,10 +775,12 @@ npm run deploy:bootstrap
 
 ```bash
 npm install
+cp wrangler.local.jsonc.example wrangler.local.jsonc   # 填入 D1/KV ID 与域名
+cp .dev.vars.example .dev.vars
 wrangler d1 create passkey-auth-db
 wrangler kv namespace create CHALLENGES
 npm run db:migrate:remote
-wrangler secret put SESSION_SECRET
+npx wrangler secret put SESSION_SECRET -c wrangler.local.jsonc
 npm run build && npm run deploy
 ```
 
@@ -718,20 +794,21 @@ npm run build && npm run deploy
 
 ---
 
-## 20. 实现顺序
+## 20. 实现顺序（历史记录）
 
-| 步骤 | 内容 |
-|------|------|
-| 1 | wrangler + migration + Hono + ASSETS |
-| 2 | session（含 `COOKIE_DOMAIN`）+ challenge + webauthn |
-| 3 | Bootstrap 全流程 |
-| 4 | **`GET /api/verify`** + 登录/登出 + return_to |
-| 5 | 注册 + 永远 pending + 管理员审批 |
-| 6 | 管理后台 + 审计 |
-| 7 | Caddy 联调 `*.xxx.com` |
-| 8 | （可选）Turnstile、Rate Limiting |
+> 以下为实现阶段计划，**核心功能已完成**。可选后续：Turnstile、Rate Limiting、审计日志按 layer/client 筛选 UI。
 
-第 4 步完成后即可用 Caddy 对接子域。
+| 步骤 | 内容 | 状态 |
+|------|------|------|
+| 1 | wrangler + migration + Hono + ASSETS | 已完成 |
+| 2 | session（含 `COOKIE_DOMAIN`）+ challenge + webauthn | 已完成 |
+| 3 | Bootstrap 全流程 | 已完成 |
+| 4 | **`GET /api/verify`** + 登录/登出 + return_to | 已完成 |
+| 5 | 注册 + 永远 pending + 管理员审批 | 已完成 |
+| 6 | 管理后台 + 审计 | 已完成 |
+| 7 | Caddy 联调 `*.xxx.com` | 已完成 |
+| 8 | L2 OAuth + 社交登录 + 加密备份 + 部署脚本 | 已完成 |
+| 9 | （可选）Turnstile、Rate Limiting | 待定 |
 
 ---
 
@@ -754,7 +831,7 @@ npm run build && npm run deploy
 A：不会。先 302 到 `auth.xxx.com/login`，在 auth 页弹 Passkey。
 
 **Q：审批前用户能访问子域吗？**  
-A：不能。pending 用户无正式 sid；即使有，verify 也返回 401。
+A：不能。pending 用户无正式 sid；即使有会话且无 L1，verify 也返回 **302** 到登录页。
 
 **Q：还要 OAuth 吗？**  
 A：`*.xxx.com` 场景不需要。共享 Cookie + forward_auth 即可。
