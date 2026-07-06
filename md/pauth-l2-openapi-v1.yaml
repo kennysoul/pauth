@@ -5,6 +5,8 @@ info:
   description: |
     OpenAPI specification for the implemented pauth authentication model.
 
+    Route index (all endpoints): docs/API.md
+
     - L1: gateway forward-auth (`GET /api/verify`)
     - OAuth L2: app login (`/api/l2/authorize`, `/api/l2/token`, `/api/l2/userinfo`)
     - Social login: Google / Microsoft (`/api/oauth/*`)

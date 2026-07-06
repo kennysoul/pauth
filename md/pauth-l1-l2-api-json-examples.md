@@ -2,6 +2,8 @@
 
 Request/response examples for the implemented pauth authentication model.
 
+**Route index:** [`docs/API.md`](../docs/API.md)
+
 Base URL (replace with your deployment `ORIGIN`):
 
 ```text

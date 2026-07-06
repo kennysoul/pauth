@@ -2,6 +2,8 @@
 
 Central Passkey authentication for `*.xxx.com` (v3).
 
+**API route index:** [`docs/API.md`](docs/API.md)
+
 ## Requirements
 
 - Node.js 20+ (`package.json` `engines.node`: `>=20.9.0`)

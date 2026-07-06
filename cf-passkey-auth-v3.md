@@ -2,7 +2,7 @@
 
 > **Workers + Assets + D1 + KV** · 中央认证 `auth.xxx.com` · **`.xxx.com` 共享 Cookie** · **Caddy Forward Auth** · **永远审批**
 
-> **pauth 扩展**：OAuth L2（`/api/l2/*`）、社交登录（`/api/oauth/*`）、L1 网关权限、Passkey 代注册、加密备份、部署脚本等见 `README.md`、`md/pauth-l1-l2-upgrade-plan-and-spec.md`、`md/pauth-l1-l2-api-json-examples.md`、`md/pauth-l2-openapi-v1.yaml`。
+> **pauth 扩展**：OAuth L2（`/api/l2/*`）、社交登录（`/api/oauth/*`）、L1 网关权限、Passkey 代注册、加密备份、部署脚本等见 `README.md`、**[`docs/API.md`](docs/API.md)**（路由索引）、`md/pauth-l1-l2-upgrade-plan-and-spec.md`、`md/pauth-l1-l2-api-json-examples.md`、`md/pauth-l2-openapi-v1.yaml`。
 
 ---
 
@@ -288,6 +288,8 @@ Cookie 值 = `sessionId` + HMAC；权威数据在 D1 `sessions`。
 ---
 
 ## 9. API 路由
+
+完整路由索引（按模块、鉴权要求）：**[`docs/API.md`](../docs/API.md)**。
 
 ```text
 公开
@@ -658,6 +660,7 @@ D1 batch：审计 → 清 sessions/passkeys/users/audit → `state=NEEDS_SETUP` 
 
 ```text
 passkey-auth/
+├── docs/API.md                   # API route index
 ├── wrangler.jsonc
 ├── wrangler.local.jsonc          # 本地部署（gitignore）
 ├── wrangler.production.jsonc     # Git Builds 模板

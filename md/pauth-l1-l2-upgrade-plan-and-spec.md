@@ -2,6 +2,8 @@
 
 This document describes the authentication model and the current implementation in pauth.
 
+**API route index:** [`docs/API.md`](../docs/API.md)
+
 ---
 
 ## 1) Architecture
