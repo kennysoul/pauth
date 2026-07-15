@@ -12,9 +12,10 @@ import {
   appendQuery,
   newAccessToken,
   newAuthCode,
-  newIdToken,
   sha256Hex,
 } from '../lib/crypto';
+import { createIdToken } from '../lib/jwt';
+import { getOidcSigningKey } from '../lib/oidc-keys';
 
 export const l2Routes = new Hono<{ Bindings: Env }>();
 
@@ -193,9 +194,22 @@ l2Routes.post('/token', async (c) => {
   await db.update(authCodes).set({ usedAt: ts }).where(eq(authCodes.code, code));
 
   const accessToken = newAccessToken();
-  const idToken = newIdToken();
   const tokenExpiresAt = new Date(Date.now() + TOKEN_TTL_SECONDS * 1000).toISOString();
   const tokenHash = await sha256Hex(accessToken);
+
+  const iat = Math.floor(Date.now() / 1000);
+  const exp = iat + TOKEN_TTL_SECONDS;
+  const signingKey = await getOidcSigningKey(c.env);
+  const idToken = await createIdToken(c.env, signingKey.kid, {
+    iss: c.env.ORIGIN,
+    sub: user.id,
+    aud: clientId,
+    exp,
+    iat,
+    ...(codeRow.nonce ? { nonce: codeRow.nonce } : {}),
+    ...(codeRow.scope.includes('email') ? { email: user.email } : {}),
+    ...(codeRow.scope.includes('profile') ? { name: user.name } : {}),
+  });
 
   await db.insert(accessTokens).values({
     tokenHash,

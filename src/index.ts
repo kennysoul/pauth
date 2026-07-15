@@ -12,6 +12,7 @@ import { oauthRoutes } from './routes/oauth';
 import { passkeyDelegateRoutes } from './routes/passkey-delegate';
 import { adminRoutes } from './routes/admin';
 import { requireAuth } from './middleware/auth';
+import { oidcDiscoveryRoutes } from './routes/oidc-discovery';
 
 const app = new Hono<{ Bindings: Env; Variables: AuthContext }>();
 
@@ -30,6 +31,8 @@ app.route('/api', meRoutes);
 
 app.use('/api/admin/*', requireAuth);
 app.route('/api/admin', adminRoutes);
+
+app.route('/.well-known', oidcDiscoveryRoutes);
 
 app.all('*', async (c) => {
   const res = await c.env.ASSETS.fetch(c.req.raw);
