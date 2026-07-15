@@ -249,13 +249,15 @@ Passkey authentication happens on the auth host during the authorize flow; the a
 - [x] Disabling user blocks next authorize/token
 - [x] Root admin cannot be renamed/disabled/deleted; backup excludes root
 - [ ] Audit log filters by layer/client — **out of scope v1** (basic list at `/admin/logs` exists; filtered UI TBD)
+- [x] OIDC discovery (`/.well-known/openid-configuration`)
+- [x] JWKS endpoint (`/.well-known/jwks.json`)
+- [x] JWT id_token (RS256 signed)
 
 ---
 
 ## 9) Out of scope (v1)
 
-- OIDC discovery / JWKS
-- JWT id_tokens (opaque `id_token` placeholder only)
+- 
 - Per-client redirect URI allowlists
 - Per-app user grants in pauth (apps manage their own authorization)
 - Fine-grained consent UI beyond `openid profile`

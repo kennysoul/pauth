@@ -204,6 +204,39 @@ curl -sk -o /dev/null -w "%{http_code} -> %{redirect_url}\n" \
 # → 302 -> https://auth.xxx.com/login?return_to=...
 ```
 
+## OpenID Connect (OIDC) / L2 OAuth
+
+pauth implements the standard OpenID Connect Provider protocol, so any OIDC Relying Party (PVE, Grafana, GitLab, etc.) can use it as an identity provider.
+
+### OIDC endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /.well-known/openid-configuration` | OIDC Discovery document — lists all endpoints automatically |
+| `GET /.well-known/jwks.json` | RS256 public key for verifying `id_token` signatures |
+| `/api/l2/authorize` | Authorization endpoint (browser redirect) |
+| `/api/l2/token` | Token endpoint (returns JWT `id_token`) |
+| `/api/l2/userinfo` | UserInfo endpoint (`sub`, `email`, `name`) |
+
+### Configuration for OIDC clients
+
+| Field | Example |
+|-------|---------|
+| **Issuer URL** | `https://auth.xxx.com` |
+| **Client ID** | Created in admin **应用管理** |
+| **Client Secret** | Provided on client creation |
+
+No manual endpoint configuration needed — the Issuer URL auto-discovers `authorization_endpoint`, `token_endpoint`, `userinfo_endpoint`, and `jwks_uri` via the discovery document.
+
+### Token details
+
+- `id_token` is a signed JWT (`RS256`) with `iss`, `sub`, `aud`, `exp`, `iat`, and optionally `nonce`, `email`, `name`
+- `access_token` is opaque (SHA-256 hash stored in D1), 600s TTL
+- Authorization codes are single-use, 600s TTL
+- `redirect_uri` accepts any HTTPS URL (or `http://localhost` / `127.0.0.1` for dev)
+
+API route index: [`docs/API.md`](docs/API.md)
+
 ## Deploy to Cloudflare
 
 ### Quick start（推荐：只传认证域名）

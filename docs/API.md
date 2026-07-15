@@ -125,6 +125,19 @@ Frontend: `/link-device?t=<token>`
 
 ---
 
+## OIDC Discovery
+
+Standard OpenID Connect Discovery (RFC 8414). No authentication required.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/.well-known/openid-configuration` | — | `{ issuer, authorization_endpoint, token_endpoint, userinfo_endpoint, jwks_uri, … }` |
+| GET | `/.well-known/jwks.json` | — | RS256 public signing key (`{ keys: [{ kid, kty, use, alg, n, e }] }`) |
+
+Discovery returns all endpoint URLs derived from `ORIGIN`. OIDC clients only need the **Issuer URL** (`ORIGIN`) to auto-configure.
+
+---
+
 ## OAuth L2 (application login)
 
 | Method | Path | Auth | Description |
