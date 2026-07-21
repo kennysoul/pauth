@@ -125,13 +125,33 @@ l2Routes.get('/authorize', async (c) => {
   );
 });
 
+function parseBasicAuth(c: Context<{ Bindings: Env }>): { clientId: string; clientSecret: string } | null {
+  const auth = c.req.header('Authorization') ?? '';
+  const basicMatch = auth.match(/^Basic\s+(.+)$/i);
+  if (!basicMatch) return null;
+  try {
+    const decoded = atob(basicMatch[1].trim());
+    const colon = decoded.indexOf(':');
+    if (colon < 1) return null;
+    return { clientId: decoded.slice(0, colon).trim(), clientSecret: decoded.slice(colon + 1).trim() };
+  } catch {
+    return null;
+  }
+}
+
 l2Routes.post('/token', async (c) => {
   const body = await c.req.parseBody();
   const grantType = String(body.grant_type ?? '').trim();
   const code = String(body.code ?? '').trim();
-  const clientId = String(body.client_id ?? '').trim();
-  const clientSecret = String(body.client_secret ?? '').trim();
+  let clientId = String(body.client_id ?? '').trim();
+  let clientSecret = String(body.client_secret ?? '').trim();
   const redirectUri = String(body.redirect_uri ?? '').trim();
+
+  const basicAuth = !clientId ? parseBasicAuth(c) : null;
+  if (basicAuth) {
+    clientId = basicAuth.clientId;
+    clientSecret = basicAuth.clientSecret;
+  }
 
   if (grantType !== 'authorization_code') {
     return oauthError(c, 400, 'unsupported_grant_type', 'Only authorization_code is supported');
