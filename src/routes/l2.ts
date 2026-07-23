@@ -81,7 +81,9 @@ l2Routes.get('/authorize', async (c) => {
         ? 'l1_required'
         : access.reason === 'user_inactive'
           ? 'user_inactive'
-          : 'access_denied';
+          : access.reason === 'client_access_denied'
+            ? 'client_access_denied'
+            : 'access_denied';
     await writeAuditLog(c.env, resolved.user.id, 'L2_AUTHORIZE_DENY', resolved.user.id, {
       clientId,
       reason: description,

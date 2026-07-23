@@ -488,6 +488,82 @@ adminRoutes.delete('/clients/:clientId', async (c) => {
   return c.json({ ok: true });
 });
 
+adminRoutes.get('/clients/:clientId/users', async (c) => {
+  const clientId = c.req.param('clientId');
+  const db = getDb(c.env);
+  const client = await db.select().from(clients).where(eq(clients.clientId, clientId)).get();
+  if (!client) {
+    return c.json({ error: 'Client not found' }, 404);
+  }
+
+  const allUsers = await db
+    .select({ id: users.id, name: users.name, email: users.email, role: users.role, status: users.status })
+    .from(users)
+    .where(eq(users.status, 'active'))
+    .all();
+
+  const accessRows = await db
+    .select()
+    .from(userClientAccess)
+    .where(eq(userClientAccess.clientId, clientId))
+    .all();
+  const accessMap = new Map(accessRows.map((r) => [r.userId, r.enabled]));
+
+  const usersList = allUsers.map((u) => ({
+    userId: u.id,
+    name: u.name,
+    email: u.email,
+    role: u.role,
+    enabled: accessMap.get(u.id) ?? 0,
+  }));
+
+  return c.json({ clientId: client.clientId, clientName: client.name, users: usersList });
+});
+
+adminRoutes.put('/clients/:clientId/users', async (c) => {
+  const clientId = c.req.param('clientId');
+  const body = await c.req.json<{ entries: { userId: string; enabled: number }[] }>();
+  const db = getDb(c.env);
+  const client = await db.select().from(clients).where(eq(clients.clientId, clientId)).get();
+  if (!client) {
+    return c.json({ error: 'Client not found' }, 404);
+  }
+
+  const ts = nowIso();
+  for (const entry of body.entries ?? []) {
+    if (entry.enabled) {
+      await db
+        .insert(userClientAccess)
+        .values({
+          userId: entry.userId,
+          clientId,
+          enabled: 1,
+          appRole: null,
+          updatedAt: ts,
+        })
+        .onConflictDoUpdate({
+          target: [userClientAccess.userId, userClientAccess.clientId],
+          set: { enabled: 1, updatedAt: ts },
+        });
+    } else {
+      await db
+        .delete(userClientAccess)
+        .where(
+          and(
+            eq(userClientAccess.userId, entry.userId),
+            eq(userClientAccess.clientId, clientId),
+          ),
+        );
+    }
+  }
+
+  await writeAuditLog(c.env, c.get('user').id, 'CLIENT_USERS_UPDATE', client.id, {
+    clientId,
+    entries: body.entries,
+  });
+  return c.json({ ok: true });
+});
+
 adminRoutes.post('/invites', async (c) => {
   const body = await c.req.json<{
     name?: string;

@@ -1,7 +1,7 @@
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import type { Env } from '../types';
 import { getDb, nowIso } from './db';
-import { userL1Access, users } from './schema';
+import { userClientAccess, userL1Access, users } from './schema';
 
 export type UserPermissions = {
   l1Enabled: boolean;
@@ -45,7 +45,7 @@ export async function userCanAccessClient(
   env: Env,
   userId: string,
   client: Pick<ClientRow, 'clientId' | 'accessMode' | 'enabled'>,
-): Promise<{ ok: true } | { ok: false; reason: 'client_disabled' | 'user_inactive' | 'l1_required' }> {
+): Promise<{ ok: true } | { ok: false; reason: 'client_disabled' | 'user_inactive' | 'l1_required' | 'client_access_denied' }> {
   if (!client.enabled) {
     return { ok: false, reason: 'client_disabled' };
   }
@@ -62,6 +62,21 @@ export async function userCanAccessClient(
 
   if (client.accessMode === 'L1_AND_L2' && !(await userHasL1Access(env, userId))) {
     return { ok: false, reason: 'l1_required' };
+  }
+
+  const accessRows = await db
+    .select({ userId: userClientAccess.userId })
+    .from(userClientAccess)
+    .where(
+      and(
+        eq(userClientAccess.clientId, client.clientId),
+        eq(userClientAccess.enabled, 1),
+      ),
+    )
+    .all();
+
+  if (accessRows.length > 0 && !accessRows.some((r) => r.userId === userId)) {
+    return { ok: false, reason: 'client_access_denied' };
   }
 
   return { ok: true };

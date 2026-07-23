@@ -127,6 +127,20 @@ export type ClientSecretResult = {
   clientSecret: string;
 };
 
+export type ClientUserEntry = {
+  userId: string;
+  name: string;
+  email: string;
+  role: string;
+  enabled: number;
+};
+
+export type ClientUsersResponse = {
+  clientId: string;
+  clientName: string;
+  users: ClientUserEntry[];
+};
+
 export type InviteResult = {
   ok: boolean;
   url: string;

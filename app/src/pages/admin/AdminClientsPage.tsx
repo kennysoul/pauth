@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { AnchoredModal } from '../../components/AnchoredModal';
-import { api, type AdminClient, type ClientCreateResult, type ClientSecretResult } from '../../api';
+import { api, type AdminClient, type ClientCreateResult, type ClientSecretResult, type ClientUsersResponse, type ClientUserEntry } from '../../api';
 
 const emptyForm = {
   clientId: '',
@@ -102,6 +102,9 @@ export function AdminClientsPage() {
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
   const [saving, setSaving] = useState(false);
   const [authOrigin, setAuthOrigin] = useState('');
+  const [userMgmtClient, setUserMgmtClient] = useState<AdminClient | null>(null);
+  const [userMgmtData, setUserMgmtData] = useState<ClientUserEntry[]>([]);
+  const [userMgmtSaving, setUserMgmtSaving] = useState(false);
 
   useEffect(() => {
     const fallback =
@@ -255,6 +258,48 @@ export function AdminClientsPage() {
     await copyText(clientConfigBlock(c.clientId, c.clientSecret, originForDocs));
   }
 
+  async function openUserMgmt(c: AdminClient) {
+    setError(null);
+    setUserMgmtClient(c);
+    setUserMgmtData([]);
+    try {
+      const data = await api<ClientUsersResponse>(`/api/admin/clients/${c.clientId}/users`);
+      setUserMgmtData(data.users);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed');
+    }
+  }
+
+  function closeUserMgmt() {
+    setUserMgmtClient(null);
+    setUserMgmtData([]);
+  }
+
+  function toggleUser(userId: string) {
+    setUserMgmtData((prev) =>
+      prev.map((u) => (u.userId === userId ? { ...u, enabled: u.enabled ? 0 : 1 } : u)),
+    );
+  }
+
+  async function saveUserMgmt() {
+    if (!userMgmtClient) return;
+    setUserMgmtSaving(true);
+    setError(null);
+    try {
+      await api(`/api/admin/clients/${userMgmtClient.clientId}/users`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          entries: userMgmtData.map((u) => ({ userId: u.userId, enabled: u.enabled })),
+        }),
+      });
+      closeUserMgmt();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed');
+    } finally {
+      setUserMgmtSaving(false);
+    }
+  }
+
   return (
     <>
       <div className="page-header">
@@ -346,6 +391,9 @@ export function AdminClientsPage() {
                     <td>{c.accessMode === 'L1_AND_L2' ? '是' : '—'}</td>
                     <td>{c.enabled ? '启用' : '禁用'}</td>
                     <td className="actions">
+                      <button className="secondary" onClick={() => openUserMgmt(c)}>
+                        用户
+                      </button>
                       <button className="secondary" onClick={() => copyClientConfig(c)}>
                         复制配置
                       </button>
@@ -393,8 +441,7 @@ export function AdminClientsPage() {
             </code>
           </p>
           <p className="sub modal-sub">
-            回调地址无需配置，任意 HTTPS 域名均可。已激活的 pauth 用户均可发起登录；若应用勾选「需 L1
-            网关」，用户还须具备 L1 权限。应用内授权由各应用自行管理。
+          回调地址无需配置，任意 HTTPS 域名均可。管理员可在「用户」按钮中限定哪些账号可用此应用登录。
           </p>
         </Modal>
       )}
@@ -432,7 +479,7 @@ export function AdminClientsPage() {
             />
             需要 L1 网关权限
           </label>
-          <p className="sub">未勾选时，任意已激活用户均可 OAuth 登录此应用。</p>
+          <p className="sub">未勾选时，设定了用户白名单后只有勾选的用户可登录；未设定则任意激活用户均可登录。</p>
           <label className="checkbox-row">
             <input
               type="checkbox"
@@ -473,6 +520,44 @@ export function AdminClientsPage() {
               disabled={saving}
               onClick={() => setConfirmAction(null)}
             >
+              取消
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {userMgmtClient && (
+        <Modal title={`应用用户 — ${userMgmtClient.name}`} onClose={closeUserMgmt} wide>
+          {error && <p className="error">{error}</p>}
+          <p className="sub modal-sub">
+            勾选的用户可以 OAuth 登录此应用。未勾选任何用户时，所有激活用户均可登录。
+          </p>
+          {userMgmtData.length === 0 ? (
+            <p className="empty-cell">暂无激活用户</p>
+          ) : (
+            <div className="user-mgmt-list">
+              {userMgmtData.map((u) => (
+                <label key={u.userId} className="checkbox-row user-mgmt-item">
+                  <input
+                    type="checkbox"
+                    checked={!!u.enabled}
+                    onChange={() => toggleUser(u.userId)}
+                  />
+                  <span className="truncate" title={u.name}>
+                    {u.name}
+                  </span>
+                  <span className="sub" style={{ fontSize: '0.8rem' }}>
+                    {u.email}
+                  </span>
+                </label>
+              ))}
+            </div>
+          )}
+          <div className="modal-actions">
+            <button disabled={userMgmtSaving} onClick={saveUserMgmt}>
+              {userMgmtSaving ? '保存中…' : '保存'}
+            </button>
+            <button type="button" className="secondary" onClick={closeUserMgmt}>
               取消
             </button>
           </div>
