@@ -64,18 +64,19 @@ export async function userCanAccessClient(
     return { ok: false, reason: 'l1_required' };
   }
 
-  const accessRows = await db
+  const excludedRow = await db
     .select({ userId: userClientAccess.userId })
     .from(userClientAccess)
     .where(
       and(
         eq(userClientAccess.clientId, client.clientId),
-        eq(userClientAccess.enabled, 1),
+        eq(userClientAccess.userId, userId),
+        eq(userClientAccess.enabled, 0),
       ),
     )
-    .all();
+    .get();
 
-  if (accessRows.length > 0 && !accessRows.some((r) => r.userId === userId)) {
+  if (excludedRow) {
     return { ok: false, reason: 'client_access_denied' };
   }
 

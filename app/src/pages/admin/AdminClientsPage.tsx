@@ -277,7 +277,7 @@ export function AdminClientsPage() {
 
   function toggleUser(userId: string) {
     setUserMgmtData((prev) =>
-      prev.map((u) => (u.userId === userId ? { ...u, enabled: u.enabled ? 0 : 1 } : u)),
+      prev.map((u) => (u.userId === userId ? { ...u, excluded: !u.excluded } : u)),
     );
   }
 
@@ -289,7 +289,7 @@ export function AdminClientsPage() {
       await api(`/api/admin/clients/${userMgmtClient.clientId}/users`, {
         method: 'PUT',
         body: JSON.stringify({
-          entries: userMgmtData.map((u) => ({ userId: u.userId, enabled: u.enabled })),
+          entries: userMgmtData.map((u) => ({ userId: u.userId, excluded: u.excluded })),
         }),
       });
       closeUserMgmt();
@@ -479,7 +479,7 @@ export function AdminClientsPage() {
             />
             需要 L1 网关权限
           </label>
-          <p className="sub">未勾选时，设定了用户白名单后只有勾选的用户可登录；未设定则任意激活用户均可登录。</p>
+          <p className="sub">勾选后只有具备 L1 网关权限的用户才可登录。未勾选时可在「用户」按钮中排除特定用户。</p>
           <label className="checkbox-row">
             <input
               type="checkbox"
@@ -529,26 +529,27 @@ export function AdminClientsPage() {
       {userMgmtClient && (
         <Modal title={`应用用户 — ${userMgmtClient.name}`} onClose={closeUserMgmt} wide>
           {error && <p className="error">{error}</p>}
-          <p className="sub modal-sub">
-            勾选的用户可以 OAuth 登录此应用。未勾选任何用户时，所有激活用户均可登录。
+          <p className="sub modal-sub" style={{ marginBottom: 0 }}>
+            勾选的用户将被<b>排除</b>，无法登录此应用。不勾选任何人时，所有激活用户均可登录。
           </p>
           {userMgmtData.length === 0 ? (
             <p className="empty-cell">暂无激活用户</p>
           ) : (
-            <div className="user-mgmt-list">
+            <div className="user-mgmt-grid">
               {userMgmtData.map((u) => (
-                <label key={u.userId} className="checkbox-row user-mgmt-item">
+                <label
+                  key={u.userId}
+                  className={`user-mgmt-card${u.excluded ? ' excluded' : ''}`}
+                >
                   <input
                     type="checkbox"
-                    checked={!!u.enabled}
+                    checked={u.excluded}
                     onChange={() => toggleUser(u.userId)}
                   />
-                  <span className="truncate" title={u.name}>
-                    {u.name}
-                  </span>
-                  <span className="sub" style={{ fontSize: '0.8rem' }}>
-                    {u.email}
-                  </span>
+                  <div className="user-mgmt-info">
+                    <span className="user-mgmt-name">{u.name}</span>
+                    <span className="user-mgmt-email">{u.email}</span>
+                  </div>
                 </label>
               ))}
             </div>

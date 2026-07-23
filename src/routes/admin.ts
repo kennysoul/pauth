@@ -505,16 +505,21 @@ adminRoutes.get('/clients/:clientId/users', async (c) => {
   const accessRows = await db
     .select()
     .from(userClientAccess)
-    .where(eq(userClientAccess.clientId, clientId))
+    .where(
+      and(
+        eq(userClientAccess.clientId, clientId),
+        eq(userClientAccess.enabled, 0),
+      ),
+    )
     .all();
-  const accessMap = new Map(accessRows.map((r) => [r.userId, r.enabled]));
+  const excludedIds = new Set(accessRows.map((r) => r.userId));
 
   const usersList = allUsers.map((u) => ({
     userId: u.id,
     name: u.name,
     email: u.email,
     role: u.role,
-    enabled: accessMap.get(u.id) ?? 0,
+    excluded: excludedIds.has(u.id),
   }));
 
   return c.json({ clientId: client.clientId, clientName: client.name, users: usersList });
@@ -522,7 +527,7 @@ adminRoutes.get('/clients/:clientId/users', async (c) => {
 
 adminRoutes.put('/clients/:clientId/users', async (c) => {
   const clientId = c.req.param('clientId');
-  const body = await c.req.json<{ entries: { userId: string; enabled: number }[] }>();
+  const body = await c.req.json<{ entries: { userId: string; excluded: boolean }[] }>();
   const db = getDb(c.env);
   const client = await db.select().from(clients).where(eq(clients.clientId, clientId)).get();
   if (!client) {
@@ -531,19 +536,19 @@ adminRoutes.put('/clients/:clientId/users', async (c) => {
 
   const ts = nowIso();
   for (const entry of body.entries ?? []) {
-    if (entry.enabled) {
+    if (entry.excluded) {
       await db
         .insert(userClientAccess)
         .values({
           userId: entry.userId,
           clientId,
-          enabled: 1,
+          enabled: 0,
           appRole: null,
           updatedAt: ts,
         })
         .onConflictDoUpdate({
           target: [userClientAccess.userId, userClientAccess.clientId],
-          set: { enabled: 1, updatedAt: ts },
+          set: { enabled: 0, updatedAt: ts },
         });
     } else {
       await db

@@ -132,7 +132,7 @@ export type ClientUserEntry = {
   name: string;
   email: string;
   role: string;
-  enabled: number;
+  excluded: boolean;
 };
 
 export type ClientUsersResponse = {
