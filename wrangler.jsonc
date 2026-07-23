@@ -1,16 +1,16 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "passkey-auth",
+  "name": "pauth-auth-kass-cc",
   "main": "src/index.ts",
   "compatibility_date": "2025-06-05",
   "compatibility_flags": ["nodejs_compat"],
 
   "vars": {
-    "RP_ID": "example.com",
-    "RP_NAME": "Passkey Auth",
-    "ORIGIN": "https://auth.example.com",
-    "COOKIE_DOMAIN": ".example.com",
-    "AUTH_HOST": "auth.example.com",
+    "RP_ID": "kass.cc",
+    "RP_NAME": "Kass Auth",
+    "ORIGIN": "https://auth.kass.cc",
+    "COOKIE_DOMAIN": ".kass.cc",
+    "AUTH_HOST": "auth.kass.cc",
     "SESSION_TTL_SECONDS": "604800",
     "SETUP_TTL_SECONDS": "600"
   },
@@ -25,8 +25,8 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "passkey-auth-db",
-      "database_id": "<YOUR_D1_DATABASE_ID>",
+      "database_name": "pauth-auth-kass-cc-db",
+      "database_id": "5911710d-ea4a-483e-abaa-9f6be347b858",
       "migrations_dir": "migrations"
     }
   ],
@@ -34,15 +34,14 @@
   "kv_namespaces": [
     {
       "binding": "CHALLENGES",
-      "id": "<YOUR_KV_NAMESPACE_ID>",
-      "preview_id": "<YOUR_KV_PREVIEW_ID>"
+      "id": "bdf9becc70d849e2a9f4c41eca2d1b6a"
     }
   ],
 
   "routes": [
     {
-      "pattern": "auth.example.com",
-      "zone_name": "example.com",
+      "pattern": "auth.kass.cc",
+      "zone_name": "kass.cc",
       "custom_domain": true
     }
   ],
