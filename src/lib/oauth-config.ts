@@ -49,13 +49,14 @@ export async function getGoogleOAuthConfig(env: Env): Promise<GoogleOAuthConfig>
   let clientSecret = clientSecretSetting.trim();
   let redirectUri = redirectUriSetting.trim();
   let scopes = scopesSetting.trim() || GOOGLE_DEFAULT_SCOPES;
+  const envRecord = env as unknown as Record<string, string>;
 
-  if (!clientId) clientId = String((env as Record<string, string>).GOOGLE_OAUTH_CLIENT_ID || '').trim();
+  if (!clientId) clientId = String(envRecord.GOOGLE_OAUTH_CLIENT_ID || '').trim();
   if (!clientSecret) {
-    clientSecret = String((env as Record<string, string>).GOOGLE_OAUTH_CLIENT_SECRET || '').trim();
+    clientSecret = String(envRecord.GOOGLE_OAUTH_CLIENT_SECRET || '').trim();
   }
   if (!redirectUri) {
-    redirectUri = String((env as Record<string, string>).GOOGLE_OAUTH_REDIRECT_URI || '').trim();
+    redirectUri = String(envRecord.GOOGLE_OAUTH_REDIRECT_URI || '').trim();
   }
 
   return {

@@ -36,7 +36,11 @@ passkeyDelegateRoutes.post('/:token/options', async (c) => {
 
   const { options, challengeId } = await createRegistrationOptions(
     c.env,
-    resolved.user,
+    {
+      ...resolved.user,
+      role: resolved.user.role as 'admin' | 'user',
+      status: resolved.user.status as 'active' | 'pending' | 'disabled',
+    },
     existing.map((r) => r.credentialId),
   );
   return c.json({ options, challengeId });
@@ -60,7 +64,11 @@ passkeyDelegateRoutes.post('/:token/verify', async (c) => {
   try {
     const cred = await verifyRegistration(
       c.env,
-      resolved.user,
+      {
+        ...resolved.user,
+        role: resolved.user.role as 'admin' | 'user',
+        status: resolved.user.status as 'active' | 'pending' | 'disabled',
+      },
       body.challengeId,
       body.registrationResponse,
     );

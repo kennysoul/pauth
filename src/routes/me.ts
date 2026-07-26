@@ -1,12 +1,13 @@
 import { Hono } from 'hono';
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, and, ne, sql } from 'drizzle-orm';
 import type { RegistrationResponseJSON } from '@simplewebauthn/server';
 import type { AuthContext, Env } from '../types';
 import { writeAuditLog } from '../lib/audit';
 import { getDb, newId, nowIso } from '../lib/db';
-import { passkeys } from '../lib/schema';
+import { passkeys, users } from '../lib/schema';
 import { requireAdmin, requireAuth } from '../middleware/auth';
 import { createRegistrationOptions, verifyRegistration } from '../lib/webauthn';
+import { isValidEmailFormat } from '../lib/oauth-email';
 
 export const meRoutes = new Hono<{ Bindings: Env; Variables: AuthContext }>();
 
@@ -118,5 +119,39 @@ meRoutes.delete('/me/passkeys/:id', async (c) => {
 
   await db.delete(passkeys).where(eq(passkeys.id, pkId));
   await writeAuditLog(c.env, user.id, 'PASSKEY_DELETE', user.id, { passkeyId: pkId });
+  return c.json({ ok: true });
+});
+
+meRoutes.put('/me/email', async (c) => {
+  const user = c.get('user');
+  const body = await c.req.json<{ email?: string }>();
+  const emailInput = body.email?.trim().toLowerCase();
+
+  if (!emailInput) {
+    return c.json({ error: 'email is required' }, 400);
+  }
+
+  if (!isValidEmailFormat(emailInput)) {
+    return c.json({ error: 'Invalid email format' }, 400);
+  }
+
+  const db = getDb(c.env);
+  const existing = await db.select().from(users)
+    .where(and(eq(users.email, emailInput), ne(users.id, user.id)))
+    .get();
+  if (existing) {
+    return c.json({ error: 'Email already in use' }, 409);
+  }
+
+  const ts = nowIso();
+  await db.update(users)
+    .set({ email: emailInput, updatedAt: ts })
+    .where(eq(users.id, user.id));
+
+  await writeAuditLog(c.env, user.id, 'USER_EMAIL_CHANGE', user.id, {
+    from: user.email,
+    to: emailInput,
+  });
+
   return c.json({ ok: true });
 });

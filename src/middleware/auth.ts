@@ -4,7 +4,7 @@ import { resolveNormalSession } from '../lib/session';
 
 export const requireAuth = createMiddleware<{ Bindings: Env; Variables: AuthContext }>(
   async (c, next) => {
-    const resolved = await resolveNormalSession(c);
+    const resolved = await resolveNormalSession(c as any);
     if (!resolved) {
       return c.json({ error: 'Unauthorized' }, 401);
     }

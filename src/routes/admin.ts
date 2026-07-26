@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { eq, and, sql, desc, isNull } from 'drizzle-orm';
+import { eq, and, ne, sql, desc, isNull } from 'drizzle-orm';
 import type { AuthContext, Env } from '../types';
 import { writeAuditLog } from '../lib/audit';
 import { getDb, nowIso, newId } from '../lib/db';
@@ -18,6 +18,7 @@ import { registerAdminBackupRoutes } from './admin-backup';
 import { buildOAuthUserFieldsSync } from './oauth';
 import { getGoogleOAuthConfig, getMicrosoftOAuthConfig } from '../lib/oauth-config';
 import { getRootUserId, isRootUserId, ROOT_USER_NAME } from '../lib/root-user';
+import { isValidEmailFormat } from '../lib/oauth-email';
 
 export const adminRoutes = new Hono<{ Bindings: Env; Variables: AuthContext }>();
 
@@ -106,8 +107,13 @@ adminRoutes.get('/users', async (c) => {
 
   const result = userRows.map((u) => {
     const byProvider = oauthMap.get(u.id);
+    const userWithRole = {
+      ...u,
+      role: u.role as 'admin' | 'user',
+      status: u.status as 'active' | 'pending' | 'disabled',
+    };
     const oauthFields = buildOAuthUserFieldsSync(
-      u,
+      userWithRole,
       countMap.get(u.id) ?? 0,
       googleEnabled,
       microsoftEnabled,
@@ -134,9 +140,9 @@ adminRoutes.get('/users', async (c) => {
 
 adminRoutes.patch('/users/:id', async (c) => {
   const targetId = c.req.param('id');
-  const body = await c.req.json<{ status?: 'active' | 'disabled'; name?: string }>();
+  const body = await c.req.json<{ status?: 'active' | 'disabled'; name?: string; email?: string }>();
 
-  if (body.status === undefined && body.name === undefined) {
+  if (body.status === undefined && body.name === undefined && body.email === undefined) {
     return c.json({ error: 'Nothing to update' }, 400);
   }
 
@@ -157,7 +163,7 @@ adminRoutes.patch('/users/:id', async (c) => {
     }
   }
 
-  const updates: { status?: 'active' | 'disabled'; name?: string; updatedAt: string } = {
+  const updates: { status?: 'active' | 'disabled'; name?: string; email?: string; updatedAt: string } = {
     updatedAt: nowIso(),
   };
 
@@ -170,6 +176,20 @@ adminRoutes.patch('/users/:id', async (c) => {
       return c.json({ error: '名称 root 保留给首个管理员' }, 400);
     }
     updates.name = name;
+  }
+
+  if (body.email !== undefined) {
+    const emailInput = body.email.trim().toLowerCase();
+    if (!isValidEmailFormat(emailInput)) {
+      return c.json({ error: 'Invalid email format' }, 400);
+    }
+    const existing = await db.select().from(users)
+      .where(and(eq(users.email, emailInput), ne(users.id, targetId)))
+      .get();
+    if (existing) {
+      return c.json({ error: 'Email already in use' }, 409);
+    }
+    updates.email = emailInput;
   }
 
   if (body.status !== undefined) {
@@ -214,6 +234,12 @@ adminRoutes.patch('/users/:id', async (c) => {
     await writeAuditLog(c.env, actor.id, 'USER_RENAME', targetId, {
       from: target.name,
       to: updates.name,
+    });
+  }
+  if (body.email !== undefined) {
+    await writeAuditLog(c.env, actor.id, 'USER_EMAIL_CHANGE', targetId, {
+      from: target.email,
+      to: updates.email,
     });
   }
 
@@ -276,7 +302,7 @@ adminRoutes.put('/users/:id/permissions', async (c) => {
 });
 
 adminRoutes.post('/users', async (c) => {
-  const body = await c.req.json<{ name?: string; role?: 'admin' | 'user'; l1Enabled?: boolean }>();
+  const body = await c.req.json<{ name?: string; role?: 'admin' | 'user'; l1Enabled?: boolean; email?: string }>();
   const name = body.name?.trim();
   if (!name) {
     return c.json({ error: 'name is required' }, 400);
@@ -288,7 +314,22 @@ adminRoutes.post('/users', async (c) => {
   const role = body.role === 'admin' ? 'admin' : 'user';
   const db = getDb(c.env);
   const userId = newId();
-  const email = `${userId}@user.internal`;
+
+  const emailInput = body.email?.trim().toLowerCase();
+  let email: string;
+  if (emailInput) {
+    if (!isValidEmailFormat(emailInput)) {
+      return c.json({ error: 'Invalid email format' }, 400);
+    }
+    const existing = await db.select().from(users).where(eq(users.email, emailInput)).get();
+    if (existing) {
+      return c.json({ error: 'Email already in use' }, 409);
+    }
+    email = emailInput;
+  } else {
+    email = `${userId}@user.internal`;
+  }
+
   const ts = nowIso();
 
   await db.insert(users).values({
@@ -304,9 +345,9 @@ adminRoutes.post('/users', async (c) => {
   });
 
   await setUserL1Access(c.env, userId, Boolean(body.l1Enabled));
-  await writeAuditLog(c.env, c.get('user').id, 'USER_CREATE', userId, { name, role });
+  await writeAuditLog(c.env, c.get('user').id, 'USER_CREATE', userId, { name, email, role });
 
-  return c.json({ ok: true, userId, name, role }, 201);
+  return c.json({ ok: true, userId, name, email, role }, 201);
 });
 
 adminRoutes.get('/users/:id/passkeys', async (c) => {

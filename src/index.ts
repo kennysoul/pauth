@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import type { AuthContext, Env } from '../types';
+import type { AuthContext, Env } from './types';
 import { csrfOriginCheck } from './lib/csrf';
 import { systemRoutes } from './routes/system';
 import { setupRoutes } from './routes/setup';

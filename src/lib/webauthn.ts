@@ -45,7 +45,7 @@ export async function createRegistrationOptions(env: Env, user: User, existingId
     rpID,
     userName: user.email,
     userDisplayName: user.name,
-    userID: new TextEncoder().encode(user.id),
+    userID: new TextEncoder().encode(user.id) as Uint8Array<ArrayBuffer>,
     attestationType: 'none',
     excludeCredentials: existingIds.map((id) => ({ id, transports: [] })),
     authenticatorSelection: {
