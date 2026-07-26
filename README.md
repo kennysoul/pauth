@@ -64,7 +64,7 @@ Open `https://auth.<your-domain>/setup` (via your reverse proxy) or http://127.0
 
 Admin **系统设置 → 加密备份**:
 
-- **Export:** password (≥8 chars) → AES-GCM encrypted JSON download
+- **Export:** password (≥8 chars) → AES-256-GCM + PBKDF2 (100k iterations) encrypted JSON download
 - **Import:** file + password → preview → confirm; replaces all non-root users, clients, and settings
 
 API: `POST /api/admin/backup/export|preview|import` (admin session required).
@@ -234,6 +234,17 @@ No manual endpoint configuration needed — the Issuer URL auto-discovers `autho
 - `access_token` is opaque (SHA-256 hash stored in D1), 600s TTL
 - Authorization codes are single-use, 600s TTL
 - `redirect_uri` accepts any HTTPS URL (or `http://localhost` / `127.0.0.1` for dev)
+
+### Email management & third-party integration
+
+Each pauth user has an `email` field (unique). The email claim is returned in OIDC `id_token` and `userinfo` responses, enabling Relying Parties to match users by email.
+
+- **Admin creates users** with an optional email field in 用户管理. If left blank, auto-generates `username@domain` (derived from `ORIGIN`).
+- **Users edit their own email** in the web UI.
+- **Admin can edit any user's email** in 用户管理 → 编辑.
+- **Immich OIDC**: ensure pauth users have a real email address (not the auto-generated placeholder). Immich matches users by the `email` claim.
+
+API endpoint: `PUT /me/email` (user self-edit) and `PATCH /admin/users/:id` (admin edit).
 
 API route index: [`docs/API.md`](docs/API.md)
 
@@ -432,8 +443,8 @@ Still required: Node.js 20+, git, python3, curl, and Cloudflare auth (`npx wrang
 | File | Purpose | Git |
 |------|---------|-----|
 | `wrangler.jsonc` | Deploy badge / Workers Builds (`npm run deploy:workers`) | commit after provision |
+| `wrangler.cdnc-us.jsonc` | Manual deploy to auth.cdnc.us | gitignored (public repo) |
 | `wrangler.local.jsonc` | Local `wrangler deploy` / dev | gitignored |
-| `wrangler.production.jsonc` | Cloudflare Git Builds (private fork) | commit after provision |
 
 When a config file already exists, the script prompts: **保留** / **仅同步 D1/KV** / **完全覆盖**.
 
@@ -441,16 +452,22 @@ The script verifies the zone is on your Cloudflare account and force-binds `AUTH
 
 ### GitHub Builds (optional)
 
-After `--deploy-mode git`:
+For auto-deploy via Cloudflare Workers Builds:
 
-1. Install [Cloudflare Workers & Pages GitHub App](https://developers.cloudflare.com/workers/ci-cd/builds/git-integration/github-integration/) on your private repo
+1. Install [Cloudflare Workers & Pages GitHub App](https://developers.cloudflare.com/workers/ci-cd/builds/git-integration/github-integration/) on your repo
 2. Dashboard → Worker → Settings → Builds → Connect to Git
 3. **Build:** `npm run build` · **Deploy:** `npm run deploy:workers`
-4. Commit `wrangler.jsonc` + `wrangler.production.jsonc` after running `provision-cloudflare.sh`
+4. Commit `wrangler.jsonc` after running `provision-cloudflare.sh`
 5. Keep `SESSION_SECRET` in Cloudflare Secrets only (from `.dev.vars` after provision)
 6. `deploy:workers` includes remote D1 migrations
 
-See `wrangler.production.jsonc.example`.
+> Only one worker per repo can use Workers Builds (it reads `wrangler.jsonc` at repo root). Additional workers (e.g. cdnc-us) must be deployed manually.
+
+For cdnc-us manual deploy:
+
+```bash
+npm run build && npx wrangler deploy --config wrangler.cdnc-us.jsonc
+```
 
 ### Manual deploy (existing checkout)
 
