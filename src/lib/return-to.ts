@@ -21,12 +21,15 @@ export function isAllowedRedirectUri(url: string, env: Env): boolean {
   return isAllowedReturnTo(url, env);
 }
 
-/** OAuth callbacks: any HTTPS URL (or localhost HTTP for dev). Active users may authorize. */
+/** OAuth callbacks: any HTTPS URL, localhost HTTP for dev, or custom scheme URIs (e.g. app.immich:// for mobile). */
 export function isAllowedL2RedirectUri(url: string, _env: Env): boolean {
   try {
     const u = new URL(url);
     if (u.protocol === 'https:') return true;
     if (u.protocol === 'http:' && (u.hostname === 'localhost' || u.hostname === '127.0.0.1')) {
+      return true;
+    }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:' && u.hostname.length > 0) {
       return true;
     }
     return false;
