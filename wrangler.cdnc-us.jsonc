@@ -1,0 +1,53 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "pauth-auth-cdnc-us",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-06-05",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "vars": {
+    "RP_ID": "cdnc.us",
+    "RP_NAME": "Cdnc Auth",
+    "ORIGIN": "https://auth.cdnc.us",
+    "COOKIE_DOMAIN": ".cdnc.us",
+    "AUTH_HOST": "auth.cdnc.us",
+    "SESSION_TTL_SECONDS": "604800",
+    "SETUP_TTL_SECONDS": "600"
+  },
+
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "pauth-auth-cdnc-us-db",
+      "database_id": "d8342cee-c3f2-4fc7-a4bc-f0a1a8507b58",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  "kv_namespaces": [
+    {
+      "binding": "CHALLENGES",
+      "id": "1751c2e481684ac9895ea35fcab8e435",
+      "preview_id": "b49ad3a108d448c48336ec09815f0132"
+    }
+  ],
+
+  "routes": [
+    {
+      "pattern": "auth.cdnc.us",
+      "zone_name": "cdnc.us",
+      "custom_domain": true
+    }
+  ],
+
+  "observability": {
+    "enabled": true
+  }
+}
