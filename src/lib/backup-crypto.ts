@@ -1,4 +1,4 @@
-const PBKDF2_ITERATIONS = 310_000;
+const PBKDF2_ITERATIONS = 100_000;
 const SALT_BYTES = 16;
 const IV_BYTES = 12;
 
@@ -15,7 +15,7 @@ function b64ToBytes(b64: string): Uint8Array {
   return out;
 }
 
-async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey> {
+async function deriveKey(password: string, salt: Uint8Array, iterations: number): Promise<CryptoKey> {
   const material = await crypto.subtle.importKey(
     'raw',
     new TextEncoder().encode(password),
@@ -27,7 +27,7 @@ async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey>
     {
       name: 'PBKDF2',
       salt,
-      iterations: PBKDF2_ITERATIONS,
+      iterations,
       hash: 'SHA-256',
     },
     material,
@@ -53,7 +53,7 @@ export async function encryptBackupPayload(plaintext: string, password: string):
   }
   const salt = crypto.getRandomValues(new Uint8Array(SALT_BYTES));
   const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
-  const key = await deriveKey(password, salt);
+  const key = await deriveKey(password, salt, PBKDF2_ITERATIONS);
   const ciphertext = await crypto.subtle.encrypt(
     { name: 'AES-GCM', iv },
     key,
@@ -87,7 +87,7 @@ export async function decryptBackupPayload(bundleText: string, password: string)
   const salt = b64ToBytes(envelope.salt);
   const iv = b64ToBytes(envelope.iv);
   const ciphertext = b64ToBytes(envelope.ciphertext);
-  const key = await deriveKey(password, salt);
+  const key = await deriveKey(password, salt, envelope.iter);
   try {
     const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
     return new TextDecoder().decode(plain);
