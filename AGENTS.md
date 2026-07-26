@@ -106,4 +106,4 @@ Phase 1 implemented:
 
 PVE, Grafana, Immich, and other OIDC Relying Parties can now use the Worker as an issuer. Set the Issuer URL to `ORIGIN`.
 
-When integrating with Immich: ensure pauth users have a real email set (not the auto-generated placeholder). Immich matches users by email claim. Users and admins can update email via the web UI.
+When integrating with Immich: ensure pauth users have a real email set (not the auto-generated placeholder). Immich matches users by email claim. Users and admins can update email via the web UI. The mobile app redirect URI `app.immich:///oauth-callback` is supported (pauth accepts any valid URL scheme as `redirect_uri`).

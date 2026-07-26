@@ -233,7 +233,7 @@ No manual endpoint configuration needed — the Issuer URL auto-discovers `autho
 - `id_token` is a signed JWT (`RS256`) with `iss`, `sub`, `aud`, `exp`, `iat`, and optionally `nonce`, `email`, `name`
 - `access_token` is opaque (SHA-256 hash stored in D1), 600s TTL
 - Authorization codes are single-use, 600s TTL
-- `redirect_uri` accepts any HTTPS URL (or `http://localhost` / `127.0.0.1` for dev)
+- `redirect_uri` accepts any valid URL (HTTPS, HTTP localhost, or custom schemes like `app.immich://` for mobile apps)
 
 ### Email management & third-party integration
 
