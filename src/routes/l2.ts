@@ -56,7 +56,7 @@ l2Routes.get('/authorize', async (c) => {
     return oauthError(c, 400, 'invalid_request', 'state is required');
   }
   if (!isAllowedL2RedirectUri(redirectUri, c.env)) {
-    return oauthError(c, 400, 'invalid_redirect_uri', 'redirect_uri must be a valid HTTPS URL');
+    return oauthError(c, 400, 'invalid_redirect_uri', 'redirect_uri must be a valid URL');
   }
 
   const db = getDb(c.env);
