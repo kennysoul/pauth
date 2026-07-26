@@ -61,10 +61,12 @@ export function AdminUsersPage() {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [createName, setCreateName] = useState('');
+  const [createEmail, setCreateEmail] = useState('');
   const [createError, setCreateError] = useState('');
 
   const [renameUser, setRenameUser] = useState<AdminUser | null>(null);
   const [renameName, setRenameName] = useState('');
+  const [renameEmail, setRenameEmail] = useState('');
 
   const [l1TogglingId, setL1TogglingId] = useState<string | null>(null);
 
@@ -151,14 +153,25 @@ export function AdminUsersPage() {
     setSaving(true);
     setCreateError('');
     try {
-      await api('/api/admin/users', {
-        method: 'POST',
-        body: JSON.stringify({ name, role: 'user' }),
-      });
+      const email = createEmail.trim() || undefined;
+      const res = await api<{ ok: boolean; userId: string; name: string; email: string; role: string }>(
+        '/api/admin/users',
+        {
+          method: 'POST',
+          body: JSON.stringify({ name, role: 'user', ...(email ? { email } : {}) }),
+        },
+      );
       setCreateOpen(false);
       setCreateName('');
+      setCreateEmail('');
       showToast('用户创建成功');
-      load();
+      await load();
+      const users = await api<AdminUser[]>('/api/admin/users');
+      const newUser = users.find((u) => u.id === res.userId);
+      if (newUser) {
+        openPkModal(newUser);
+        generatePkLinkForUser(newUser);
+      }
     } catch (e) {
       setCreateError(e instanceof Error ? e.message : '创建失败');
     } finally {
@@ -169,6 +182,7 @@ export function AdminUsersPage() {
   function openRenameModal(u: AdminUser) {
     setRenameUser(u);
     setRenameName(u.name);
+    setRenameEmail(u.email || '');
   }
 
   async function saveRename() {
@@ -180,12 +194,17 @@ export function AdminUsersPage() {
     }
     setSaving(true);
     try {
+      const body: Record<string, string> = { name };
+      const emailInput = renameEmail.trim();
+      if (emailInput && emailInput !== renameUser.email) {
+        body.email = emailInput;
+      }
       await api(`/api/admin/users/${renameUser.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ name }),
+        body: JSON.stringify(body),
       });
       setRenameUser(null);
-      showToast('名字已更新');
+      showToast('已更新');
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed');
@@ -399,11 +418,10 @@ export function AdminUsersPage() {
     pkTimerRef.current = window.setInterval(tick, 1000);
   }
 
-  async function generatePkLink() {
-    if (!pkUser) return;
+  async function generatePkLinkForUser(user: AdminUser) {
     setPkLoading(true);
     try {
-      const res = await api<PasskeyDelegateResult>(`/api/admin/users/${pkUser.id}/passkeys/delegate`, {
+      const res = await api<PasskeyDelegateResult>(`/api/admin/users/${user.id}/passkeys/delegate`, {
         method: 'POST',
       });
       setPkLink(res.link);
@@ -416,6 +434,11 @@ export function AdminUsersPage() {
     } finally {
       setPkLoading(false);
     }
+  }
+
+  async function generatePkLink() {
+    if (!pkUser) return;
+    await generatePkLinkForUser(pkUser);
   }
 
   function updateAltLink(domain: string, baseLink: string) {
@@ -581,6 +604,7 @@ export function AdminUsersPage() {
               <thead>
                 <tr>
                   <th>用户名</th>
+                  <th>邮箱</th>
                   <th>角色</th>
                   <th>状态</th>
                   <th>注册时间</th>
@@ -590,13 +614,13 @@ export function AdminUsersPage() {
               <tbody>
                 {usersLoading ? (
                   <tr>
-                    <td colSpan={5} className="table-empty">
+                    <td colSpan={6} className="table-empty">
                       加载中…
                     </td>
                   </tr>
                 ) : users.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="table-empty">
+                    <td colSpan={6} className="table-empty">
                       暂无用户
                     </td>
                   </tr>
@@ -606,6 +630,9 @@ export function AdminUsersPage() {
                       <td>
                         {u.name}
                         {u.isRoot && <span className="role-chip admin" style={{ marginLeft: '0.5rem' }}>root</span>}
+                      </td>
+                      <td className={u.email.includes('@user.internal') || u.email.includes('@invite.internal') ? 'email-placeholder' : ''}>
+                        {u.email}
                       </td>
                       <td>{renderRoleCell(u)}</td>
                       <td>
@@ -638,7 +665,16 @@ export function AdminUsersPage() {
                   placeholder="用户名"
                   autoFocus
                 />
-                <div className="users-create-hint">用户名至少 1 个字符，不限制长度。</div>
+                <input
+                  id="create-email"
+                  className="users-create-input"
+                  style={{ marginTop: 8 }}
+                  value={createEmail}
+                  onChange={(e) => setCreateEmail(e.target.value)}
+                  placeholder="邮箱（可选，不填自动生成）"
+                  type="email"
+                />
+                <div className="users-create-hint">邮箱用于 OIDC 登录匹配（如 Immich），可后续修改。</div>
                 {createError && <div className="users-pk-msg" style={{ color: '#f87171' }}>{createError}</div>}
               </div>
             </div>
@@ -656,15 +692,22 @@ export function AdminUsersPage() {
       {renameUser && (
         <AnchoredModal onClose={() => setRenameUser(null)} className="users-modal" style={{ width: 360 }}>
             <div className="users-modal-header">
-              <div className="users-modal-title">修改用户名</div>
-              <div className="users-modal-sub">修改 {renameUser.name} 的显示名称</div>
+              <div className="users-modal-title">编辑用户</div>
+              <div className="users-modal-sub">修改 {renameUser.name} 的信息</div>
             </div>
             <div className="users-modal-body">
               <input
                 value={renameName}
                 onChange={(e) => setRenameName(e.target.value)}
-                placeholder="新用户名"
+                placeholder="用户名"
                 autoFocus
+              />
+              <input
+                style={{ marginTop: 8 }}
+                value={renameEmail}
+                onChange={(e) => setRenameEmail(e.target.value)}
+                placeholder="邮箱"
+                type="email"
               />
             </div>
             <div className="users-modal-footer">
