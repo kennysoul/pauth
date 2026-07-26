@@ -41,16 +41,55 @@ jobs:
       - run: npm ci
       - run: npm run build
 
+      - name: Generate wrangler config
+        run: |
+          cat > wrangler.cdnc-us.jsonc << 'CONFEOF'
+          {
+            "$schema": "node_modules/wrangler/config-schema.json",
+            "name": "pauth-auth-cdnc-us",
+            "main": "src/index.ts",
+            "compatibility_date": "2025-06-05",
+            "compatibility_flags": ["nodejs_compat"],
+            "vars": {
+              "RP_ID": "cdnc.us",
+              "RP_NAME": "Cdnc Auth",
+              "ORIGIN": "https://auth.cdnc.us",
+              "COOKIE_DOMAIN": ".cdnc.us",
+              "AUTH_HOST": "auth.cdnc.us",
+              "SESSION_TTL_SECONDS": "604800",
+              "SETUP_TTL_SECONDS": "600"
+            },
+            "assets": {
+              "directory": "./dist",
+              "binding": "ASSETS",
+              "not_found_handling": "single-page-application",
+              "run_worker_first": true
+            },
+            "d1_databases": [{
+              "binding": "DB",
+              "database_name": "pauth-auth-cdnc-us-db",
+              "database_id": "${{ secrets.CDNC_D1_DATABASE_ID }}",
+              "migrations_dir": "migrations"
+            }],
+            "kv_namespaces": [{
+              "binding": "CHALLENGES",
+              "id": "${{ secrets.CDNC_KV_CHALLENGES_ID }}"
+            }],
+            "routes": [{
+              "pattern": "auth.cdnc.us",
+              "zone_name": "cdnc.us",
+              "custom_domain": true
+            }],
+            "observability": { "enabled": true }
+          }
+          CONFEOF
+
       - name: Run D1 migrations
         run: npx wrangler d1 migrations apply DB --remote --config wrangler.cdnc-us.jsonc
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CF_API_KEY: ${{ secrets.CF_API_KEY }}
-          CF_EMAIL: ${{ secrets.CF_EMAIL }}
 
       - name: Deploy to auth.cdnc.us
         run: npx wrangler deploy --config wrangler.cdnc-us.jsonc
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CF_API_KEY: ${{ secrets.CF_API_KEY }}
-          CF_EMAIL: ${{ secrets.CF_EMAIL }}
