@@ -33,9 +33,9 @@ npx tsc --noEmit
 
 | File | Purpose | Git |
 |------|---------|-----|
-| `wrangler.jsonc` | Workers Builds / Deploy badge CI | committed |
-| `wrangler.local.jsonc` | Local dev + manual deploy | gitignored |
-| `wrangler.production.jsonc` | Private GitHub Builds | committed (private repos) |
+| `wrangler.jsonc` | Workers Builds auto-deploy (auth.kass.cc) | committed |
+| `wrangler.cdnc-us.jsonc` | Manual deploy (auth.cdnc.us) | gitignored (public repo, contains D1/KV IDs) |
+| `wrangler.local.jsonc` | Local dev | gitignored |
 
 ### Directory layout
 
@@ -70,6 +70,7 @@ Cookies are HMAC-SHA-256 signed (`sessionId.signature`). Sessions are stored ser
 - **Setup**: First admin (`root`) registers passkey → system transitions `NEEDS_SETUP → ACTIVE`
 - **Login**: WebAuthn authentication challenge (KV, 60s) → verify → session cookie
 - **Registration**: Gated by `registrationEnabled` system config toggle. New users land in `pending` status.
+- **Admin user creation**: Admin creates user with optional email. If omitted, auto-generates `username@domain` (derived from `ORIGIN`). Duplicate names get numbered suffix.
 - **Invites**: Admin-generated token (7-day TTL) → invitee registers passkey → auto-activates
 - **Passkey delegate**: Admin generates 600s token for a user to register an additional passkey without logging in
 - **Social OAuth**: Google + Microsoft login/bind. Email normalization for Gmail (dots stripped).
@@ -81,17 +82,18 @@ Earliest-created admin is always named `root`. Cannot be renamed, disabled, or d
 
 ### Encrypted backup
 
-AES-256-GCM + PBKDF2 (310k iterations). Root user excluded. Import replaces all non-root data after preview+confirm.
+AES-256-GCM + PBKDF2 (100k iterations, Workers Web Crypto API limit). Root user excluded. Import replaces all non-root data after preview+confirm.
 
 ## Gotchas
 
 - **No linter, formatter, or test suite** — only `tsc --noEmit` for verification
-- **`tsc --noEmit` currently has pre-existing errors** (~9 across 6 files): `src/index.ts` has a broken `../types` import (should be `./types`), plus a few type-cast issues in `oauth-config.ts`, `webauthn.ts`, `auth.ts`, `admin.ts`, and `passkey-delegate.ts`. The bundler (wrangler/esbuild) resolves these at build time, but new code should fix rather than replicate these patterns.
+- **`tsc --noEmit` must pass** — all TypeScript errors were fixed. Keep it clean.
 - **Passkey flows require a real browser** — platform authenticator or security key. API-only smoke tests can't exercise registration/login.
 - **`SESSION_SECRET`** must be ≥32 chars and never committed (`.dev.vars` is gitignored)
-- **`wrangler.jsonc`** placeholder values must be replaced before deploy (D1/KV IDs, domain vars)
+- **`wrangler.cdnc-us.jsonc`** must not be committed (public repo, contains D1/KV IDs). Deploy manually: `npm run build && npx wrangler deploy --config wrangler.cdnc-us.jsonc`
 - **Forward auth** (`/api/verify`) returns 302 (not 401) when unauthenticated — Caddy's `forward_auth` directive handles this correctly
 - **Migrations run separately**: `db:migrate:local` before local dev, `db:migrate:remote:workers` is bundled into `deploy:workers`
+- **Email field**: users have an email (unique). Admin sets it on creation (optional — auto-generates `username@domain` if blank). Users can edit their own email via `PUT /me/email`. Admin can edit any user's email. Used by OIDC RPs (e.g. Immich) for user matching.
 
 ## OIDC / generic SSO support
 
@@ -102,4 +104,6 @@ Phase 1 implemented:
 - Access tokens remain opaque (stored as SHA-256 hashes in D1)
 - Signing key is auto-generated on first use and persisted in the `settings` table
 
-PVE, Grafana, and other OIDC Relying Parties can now use the Worker as an issuer. Set the Issuer URL to `ORIGIN`.
+PVE, Grafana, Immich, and other OIDC Relying Parties can now use the Worker as an issuer. Set the Issuer URL to `ORIGIN`.
+
+When integrating with Immich: ensure pauth users have a real email set (not the auto-generated placeholder). Immich matches users by email claim. Users and admins can update email via the web UI.
