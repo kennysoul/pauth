@@ -327,7 +327,17 @@ adminRoutes.post('/users', async (c) => {
     }
     email = emailInput;
   } else {
-    email = `${userId}@user.internal`;
+    const domain = new URL(c.env.ORIGIN).hostname.replace(/^auth\./, '');
+    const baseLocal = name.toLowerCase().replace(/[^a-z0-9._-]/g, '').slice(0, 64) || 'user';
+    let candidate = `${baseLocal}@${domain}`;
+    let suffix = 1;
+    while (true) {
+      const dup = await db.select().from(users).where(eq(users.email, candidate)).get();
+      if (!dup) break;
+      candidate = `${baseLocal}${suffix}@${domain}`;
+      suffix++;
+    }
+    email = candidate;
   }
 
   const ts = nowIso();

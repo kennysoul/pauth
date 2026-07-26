@@ -506,9 +506,9 @@ export function AdminUsersPage() {
             批准
           </button>
         )}
-        {!u.isRoot && (
+        {(!u.isRoot || (me && u.id === me.id)) && (
           <button type="button" className="credential-btn" onClick={() => openRenameModal(u)}>
-            改名
+            编辑
           </button>
         )}
         <button
