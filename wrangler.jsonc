@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "pauth-auth-kass-cc",
+  "name": "pauth-auth-cdnc-us",
   "main": "src/index.ts",
   "compatibility_date": "2025-06-05",
   "compatibility_flags": ["nodejs_compat"],
