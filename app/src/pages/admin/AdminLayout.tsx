@@ -34,12 +34,7 @@ export function AdminLayout() {
   }
 
   if (me.role !== 'admin') {
-    return (
-      <div className="container">
-        <p className="error">需要管理员权限</p>
-        <NavLink to="/login">返回登录</NavLink>
-      </div>
-    );
+    return <Navigate to="/me" replace />;
   }
 
   return (

@@ -58,6 +58,9 @@ async function finishLogin(c: Context, userId: string, nextPath: string) {
   const { setCookie } = await createSession(c.env, userId, 'normal');
   appendCookies(c, setCookie);
   await writeAuditLog(c.env, userId, 'OAUTH_LOGIN', userId, {});
+  if (user.role !== 'admin' && nextPath.startsWith('/admin')) {
+    nextPath = '/me';
+  }
   return c.redirect(nextPath, 302);
 }
 

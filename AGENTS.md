@@ -25,17 +25,22 @@ npm run deploy:workers
 npx tsc --noEmit
 ```
 
-**Build is required before `dev` or `deploy`** — Vite builds `app/` into `dist/` which the Worker serves as static assets.
+**Build is required before `dev` or `deploy`** — Vite builds `app/` (React SPA) into `dist/` which the Worker serves as static assets.
+
+**`tsc --noEmit` only checks `src/`** (Worker code, per `tsconfig.json` `include`). The React frontend in `app/` is compiled by Vite and is not type-checked.
 
 ## Architecture
 
-### Three wrangler configs
+### Wrangler configs
 
 | File | Purpose | Git |
 |------|---------|-----|
-| `wrangler.jsonc` | Workers Builds auto-deploy (auth.kass.cc) | committed |
-| `wrangler.cdnc-us.jsonc` | Manual deploy (auth.cdnc.us) | gitignored (public repo, contains D1/KV IDs) |
+| `wrangler.jsonc` | Workers Builds (auth.kass.cc) | committed |
+| `wrangler.production.jsonc` | Alternative Workers Builds config | from `.example`, committed after provision |
+| `wrangler.cdnc-us.jsonc` | Manual deploy (auth.cdnc.us) | gitignored (public repo) |
 | `wrangler.local.jsonc` | Local dev | gitignored |
+
+All wrangler commands need `--config <file>` to target the right config. Never run wrangler without it.
 
 ### Directory layout
 
@@ -94,6 +99,7 @@ AES-256-GCM + PBKDF2 (100k iterations, Workers Web Crypto API limit). Root user 
 - **Forward auth** (`/api/verify`) returns 302 (not 401) when unauthenticated — Caddy's `forward_auth` directive handles this correctly
 - **Migrations run separately**: `db:migrate:local` before local dev, `db:migrate:remote:workers` is bundled into `deploy:workers`
 - **Email field**: users have an email (unique). Admin sets it on creation (optional — auto-generates `username@domain` if blank). Users can edit their own email via `PUT /me/email`. Admin can edit any user's email. Used by OIDC RPs (e.g. Immich) for user matching.
+- **Deploy scripts** (`scripts/`) handle full provisioning (D1, KV, secrets, domain binding) from just an auth hostname. `npm run deploy:full` calls `scripts/full-deploy-cloudflare.sh`. Use these for greenfield deploys; manual `wrangler deploy` for updates to an existing Worker.
 
 ## OIDC / generic SSO support
 

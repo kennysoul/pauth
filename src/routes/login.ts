@@ -59,7 +59,7 @@ loginRoutes.post('/verify', async (c) => {
     const returnTo = sanitizeReturnTo(body.returnTo, c.env);
     return c.json({
       ok: true,
-      redirect: returnTo ?? (user.role === 'admin' ? '/admin' : '/login'),
+      redirect: returnTo ?? (user.role === 'admin' ? '/admin' : '/me'),
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : 'Authentication failed';

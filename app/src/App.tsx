@@ -12,6 +12,7 @@ import { AdminConfigPage } from './pages/admin/AdminConfigPage';
 import { AdminIntegrationPage } from './pages/admin/AdminIntegrationPage';
 import { AdminLogsPage } from './pages/admin/AdminLogsPage';
 import { InvitePage } from './pages/InvitePage';
+import { MePage } from './pages/MePage';
 
 export function App() {
   const [state, setState] = useState<SystemState | null>(null);
@@ -64,6 +65,7 @@ export function App() {
       />
       <Route path="/invite/:token" element={<InvitePage />} />
       <Route path="/link-device" element={<LinkDevicePage />} />
+      <Route path="/me" element={<MePage />} />
       <Route path="/admin" element={<AdminLayout />}>
         <Route index element={<Navigate to="/admin/users" replace />} />
         <Route path="users" element={<AdminUsersPage />} />
