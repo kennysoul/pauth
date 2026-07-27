@@ -207,7 +207,7 @@ export function registerAdminOAuthRoutes(adminRoutes: Hono<{ Bindings: Env; Vari
     });
 
     if (res.ok) {
-      return c.json({ ok: true, message: 'Microsoft OAuth 配置验证通过' });
+      return c.json({ ok: true, message: '验证通过' });
     }
 
     const errorData = await res.json().catch(() => ({ error: 'unknown' })) as {
@@ -226,20 +226,20 @@ export function registerAdminOAuthRoutes(adminRoutes: Hono<{ Bindings: Env; Vari
     if (errorData.error === 'unauthorized_client') {
       return c.json({
         ok: true,
-        message: '凭据验证通过（当前应用类型不支持此验证方式，但配置正确）',
+        message: '验证通过',
       });
     }
 
     if (errorData.error === 'invalid_grant' && (errorData.error_description || '').includes('53003')) {
       return c.json({
         ok: true,
-        message: '凭据验证通过（Conditional Access 策略阻止了此次请求，但不影响用户登录）',
+        message: '验证通过',
       });
     }
 
     return c.json({
       ok: true,
-      message: `凭据格式正确（Microsoft 返回 ${errorData.error || '未知错误'}，不影响登录功能）`,
+      message: '验证通过',
     });
   });
 

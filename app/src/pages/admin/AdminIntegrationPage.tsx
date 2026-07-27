@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, type GoogleIntegration, type MicrosoftIntegration, type ValidateResult, type WebAuthIntegration } from '../../api';
 import { useToast } from '../../components/useToast';
 
@@ -36,25 +36,40 @@ function SecretField({
   onChange: (v: string) => void;
   secretSet: boolean;
 }) {
-  const [visible, setVisible] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+
+  function toggle() {
+    const input = inputRef.current;
+    const btn = btnRef.current;
+    if (!input || !btn) return;
+    if (input.type === 'password') {
+      input.type = 'text';
+      btn.classList.add('is-visible');
+    } else {
+      input.type = 'password';
+      btn.classList.remove('is-visible');
+    }
+  }
 
   return (
     <div className="secret-input-wrap">
       <input
+        ref={inputRef}
         id={id}
-        type="text"
-        className={visible ? '' : 'secret-mask'}
+        type="password"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder={secretSet && !visible ? '********' : '未配置请填写 Client Secret'}
+        placeholder={secretSet ? '********' : '未配置请填写 Client Secret'}
         autoComplete="new-password"
       />
       <button
+        ref={btnRef}
         type="button"
-        className={`secret-visibility-btn${visible ? ' is-visible' : ''}`}
-        onClick={() => setVisible((v) => !v)}
-        aria-label={visible ? '隐藏 Secret' : '显示 Secret'}
-        title={visible ? '隐藏 Secret' : '显示 Secret'}
+        className="secret-visibility-btn"
+        onClick={toggle}
+        aria-label="显示 Secret"
+        title="显示 Secret"
       >
         <svg className="icon-hide" viewBox="0 0 24 24" aria-hidden="true">
           <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z"></path>
@@ -94,12 +109,10 @@ function toMicrosoftForm(m: MicrosoftIntegration): MicrosoftForm {
 function IntegrationCardHead({
   title,
   desc,
-  status,
   children,
 }: {
   title: string;
   desc: string;
-  status?: { on: boolean; onLabel?: string; offLabel?: string };
   children?: React.ReactNode;
 }) {
   return (
@@ -107,11 +120,6 @@ function IntegrationCardHead({
       <div>
         <div className="integration-title-row">
           <h3>{title}</h3>
-          {status && (
-            <span className={`status-chip ${status.on ? 'active' : 'disabled'}`}>
-              {status.on ? (status.onLabel ?? '已启用') : (status.offLabel ?? '未启用')}
-            </span>
-          )}
           {children}
         </div>
         <p className="config-card-desc">{desc}</p>
@@ -156,6 +164,14 @@ export function AdminIntegrationPage() {
       ]);
       const gForm = toGoogleForm(g);
       const mForm = toMicrosoftForm(m);
+      if (g.clientSecretSet && !gForm.clientSecret) {
+        const cached = localStorage.getItem('pauth-google-secret');
+        if (cached) gForm.clientSecret = cached;
+      }
+      if (m.clientSecretSet && !mForm.clientSecret) {
+        const cached = localStorage.getItem('pauth-microsoft-secret');
+        if (cached) mForm.clientSecret = cached;
+      }
       setWebauth(w);
       setGoogle(gForm);
       setMicrosoft(mForm);
@@ -317,7 +333,6 @@ export function AdminIntegrationPage() {
               <IntegrationCardHead
                 title="Google OAuth"
                 desc="Client ID 与 Client Secret 为必填；Redirect URI 可选。"
-                status={{ on: google.enabled }}
               >
                 <button
                   type="button"
@@ -342,7 +357,7 @@ export function AdminIntegrationPage() {
                   <SecretField
                     id="google-client-secret"
                     value={google.clientSecret}
-                    onChange={(v) => setGoogle({ ...google, clientSecret: v })}
+                     onChange={(v) => { setGoogle({ ...google, clientSecret: v }); localStorage.setItem('pauth-google-secret', v); }}
                     secretSet={google.clientSecretSet}
                   />
                 </div>
@@ -367,7 +382,6 @@ export function AdminIntegrationPage() {
               <IntegrationCardHead
                 title="Microsoft"
                 desc="在本页面配置 Microsoft 登录，不依赖 wrangler/env。"
-                status={{ on: microsoft.enabled }}
               >
                 <button
                   type="button"
@@ -401,7 +415,7 @@ export function AdminIntegrationPage() {
                   <SecretField
                     id="ms-client-secret"
                     value={microsoft.clientSecret}
-                    onChange={(v) => setMicrosoft({ ...microsoft, clientSecret: v })}
+                    onChange={(v) => { setMicrosoft({ ...microsoft, clientSecret: v }); localStorage.setItem('pauth-microsoft-secret', v); }}
                     secretSet={microsoft.clientSecretSet}
                   />
                 </div>

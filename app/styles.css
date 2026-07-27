@@ -131,7 +131,7 @@ button:disabled,
 
 button.primary,
 .btn.primary,
-button:not(.secondary):not(.credential-btn):not(.icon-btn):not(.link-btn):not(.link-copy):not(.nav-item):not(.danger):not(.warn):not(.l1-chip):not(.secret-visibility-btn) {
+button:not(.secondary):not(.credential-btn):not(.icon-btn):not(.link-btn):not(.link-copy):not(.nav-item):not(.danger):not(.warn):not(.l1-chip):not(.secret-visibility-btn):not(.validate-chip) {
   border-color: rgba(250, 45, 85, 0.55);
   color: #ffe8ed;
   background: linear-gradient(180deg, #e43d5f, #c7244a);
@@ -139,7 +139,7 @@ button:not(.secondary):not(.credential-btn):not(.icon-btn):not(.link-btn):not(.l
 
 button.primary:hover,
 .btn.primary:hover,
-button:not(.secondary):not(.credential-btn):not(.icon-btn):not(.link-btn):not(.link-copy):not(.nav-item):not(.danger):not(.warn):not(.secret-visibility-btn):hover {
+button:not(.secondary):not(.credential-btn):not(.icon-btn):not(.link-btn):not(.link-copy):not(.nav-item):not(.danger):not(.warn):not(.secret-visibility-btn):not(.validate-chip):hover {
   filter: brightness(1.04);
 }
 
@@ -544,25 +544,24 @@ td {
 .validate-chip {
   display: inline-block;
   border-radius: 6px;
-  border: 1px solid #3c4f93;
+  border: 1px solid rgba(62, 207, 142, 0.4);
   padding: 2px 8px;
   font-size: 11px;
   font-weight: 700;
-  color: #b8c4ff;
-  background: rgba(58, 76, 166, 0.2);
+  color: #a4f0d0;
+  background: rgba(62, 207, 142, 0.14);
   cursor: pointer;
   font-family: inherit;
   line-height: inherit;
 }
 
 .validate-chip:hover:not(:disabled) {
-  background: rgba(98, 60, 163, 0.35);
-  border-color: #5c3e93;
-  color: #d0b4ff;
+  background: rgba(62, 207, 142, 0.28);
+  border-color: rgba(62, 207, 142, 0.6);
 }
 
 .validate-chip:disabled {
-  opacity: 0.5;
+  opacity: 0.35;
   cursor: default;
 }
 
