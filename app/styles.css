@@ -1327,20 +1327,56 @@ td {
 }
 
 .secret-input-wrap {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 0.35rem;
+  width: 100%;
 }
 
 .secret-input-wrap input {
   flex: 1;
   min-width: 0;
   margin-bottom: 0;
+  padding-right: 36px;
 }
 
-.secret-mask {
-  -webkit-text-security: disc;
+.secret-visibility-btn {
+  position: absolute;
+  right: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: #8c97b5;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0;
 }
+
+.secret-visibility-btn svg {
+  width: 15px;
+  height: 15px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
+.secret-visibility-btn:hover { color: #dbe3f8; }
+
+.secret-visibility-btn .icon-show { display: none; }
+
+.secret-visibility-btn.is-visible .icon-hide { display: none; }
+.secret-visibility-btn.is-visible .icon-show { display: block; }
 
 .page-header .sub.integration-subtitle {
   margin-bottom: 0;

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, type GoogleIntegration, type MicrosoftIntegration, type ValidateResult, type WebAuthIntegration } from '../../api';
 import { useToast } from '../../components/useToast';
 
@@ -37,43 +37,43 @@ function SecretField({
   secretSet: boolean;
 }) {
   const [visible, setVisible] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  function toggleVisibility() {
+    const input = inputRef.current;
+    if (!input) return;
+    const newVisible = !visible;
+    setVisible(newVisible);
+    input.type = newVisible ? 'text' : 'password';
+  }
+
   return (
     <div className="secret-input-wrap">
       <input
+        ref={inputRef}
         id={id}
-        type="text"
-        className={visible ? '' : 'secret-mask'}
+        type="password"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder={secretSet && !visible ? '********' : '未配置请填写 Client Secret'}
+        placeholder={secretSet ? '********' : '未配置请填写 Client Secret'}
         autoComplete="new-password"
       />
       <button
         type="button"
-        className={`icon-btn eye-btn${visible ? ' is-visible' : ''}`}
-        onClick={() => setVisible((v) => !v)}
+        className={`secret-visibility-btn${visible ? ' is-visible' : ''}`}
+        onClick={toggleVisibility}
         aria-label={visible ? '隐藏 Secret' : '显示 Secret'}
         title={visible ? '隐藏 Secret' : '显示 Secret'}
       >
-        {visible ? (
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path
-              d="M3 3l18 18M10.58 10.58A3 3 0 0 0 12 15a3 3 0 0 0 2.42-4.42M9.9 4.24A10.94 10.94 0 0 1 12 4c7 0 10 7 10 7a16.2 16.2 0 0 1-3.17 4.19M6.12 6.12A16.2 16.2 0 0 0 2 12s3 7 10 7a10.94 10.94 0 0 0 4.24-.9"
-              stroke="currentColor"
-              strokeWidth="1.75"
-              strokeLinecap="round"
-            />
-          </svg>
-        ) : (
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path
-              d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"
-              stroke="currentColor"
-              strokeWidth="1.75"
-            />
-            <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.75" />
-          </svg>
-        )}
+        <svg className="icon-hide" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z"></path>
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M4 20L20 4"></path>
+        </svg>
+        <svg className="icon-show" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z"></path>
+          <circle cx="12" cy="12" r="3"></circle>
+        </svg>
       </button>
     </div>
   );
