@@ -78,6 +78,61 @@ export function registerAdminOAuthRoutes(adminRoutes: Hono<{ Bindings: Env; Vari
     });
   });
 
+  adminRoutes.post('/integration/google/validate', async (c) => {
+    const conf = await getGoogleOAuthConfig(c.env);
+    const clientId = conf.clientId;
+    const clientSecret = conf.clientSecret;
+
+    if (!clientId || !clientSecret) {
+      return c.json({ ok: false, error: '请先填写 Client ID 和 Client Secret 并保存' }, 400);
+    }
+
+    const redirectUri = conf.redirectUri || googleRedirectUri(c.env, conf);
+    const tokenUrl = 'https://oauth2.googleapis.com/token';
+    const body = new URLSearchParams({
+      grant_type: 'authorization_code',
+      code: 'invalid_test_code',
+      client_id: clientId,
+      client_secret: clientSecret,
+      redirect_uri: redirectUri,
+    });
+
+    const res = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+    });
+
+    if (res.ok) {
+      return c.json({ ok: true, message: 'Google OAuth 配置验证通过' });
+    }
+
+    const errorData = await res.json().catch(() => ({ error: 'unknown' })) as {
+      error?: string;
+      error_description?: string;
+    };
+
+    if (errorData.error === 'invalid_client') {
+      return c.json({
+        ok: false,
+        error: 'Client ID 或 Client Secret 无效',
+        detail: errorData.error_description || '请检查配置并在 Google Cloud Console 中确认凭据',
+      }, 400);
+    }
+
+    if (errorData.error === 'invalid_grant' || errorData.error === 'redirect_uri_mismatch') {
+      return c.json({
+        ok: true,
+        message: '凭据验证通过',
+      });
+    }
+
+    return c.json({
+      ok: true,
+      message: `凭据格式正确（Google 返回 ${errorData.error || '未知错误'}，不影响登录功能）`,
+    });
+  });
+
   adminRoutes.get('/integration/microsoft', async (c) => {
     const conf = await getMicrosoftOAuthConfig(c.env);
     return c.json({

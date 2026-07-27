@@ -541,6 +541,31 @@ td {
   background: rgba(255, 111, 123, 0.16);
 }
 
+.validate-chip {
+  display: inline-block;
+  border-radius: 6px;
+  border: 1px solid #3c4f93;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #b8c4ff;
+  background: rgba(58, 76, 166, 0.2);
+  cursor: pointer;
+  font-family: inherit;
+  line-height: inherit;
+}
+
+.validate-chip:hover:not(:disabled) {
+  background: rgba(98, 60, 163, 0.35);
+  border-color: #5c3e93;
+  color: #d0b4ff;
+}
+
+.validate-chip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* User settings */
 
 .users-settings-card {

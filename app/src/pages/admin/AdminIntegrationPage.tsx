@@ -40,6 +40,7 @@ function SecretField({
   return (
     <div className="secret-input-wrap">
       <input
+        key={String(visible)}
         id={id}
         type={visible ? 'text' : 'password'}
         value={value}
@@ -103,10 +104,12 @@ function IntegrationCardHead({
   title,
   desc,
   status,
+  children,
 }: {
   title: string;
   desc: string;
   status?: { on: boolean; onLabel?: string; offLabel?: string };
+  children?: React.ReactNode;
 }) {
   return (
     <div className="settings-inline-head integration-card-head">
@@ -118,6 +121,7 @@ function IntegrationCardHead({
               {status.on ? (status.onLabel ?? '已启用') : (status.offLabel ?? '未启用')}
             </span>
           )}
+          {children}
         </div>
         <p className="config-card-desc">{desc}</p>
       </div>
@@ -129,7 +133,8 @@ export function AdminIntegrationPage() {
   const { showToast, toastEl } = useToast();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [validating, setValidating] = useState(false);
+  const [validatingGoogle, setValidatingGoogle] = useState(false);
+  const [validatingMicrosoft, setValidatingMicrosoft] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [webauth, setWebauth] = useState<WebAuthIntegration | null>(null);
   const [google, setGoogle] = useState<GoogleForm>({
@@ -223,8 +228,30 @@ export function AdminIntegrationPage() {
     }
   }
 
+  async function validateGoogle() {
+    setValidatingGoogle(true);
+    setError(null);
+    try {
+      const result = await api<ValidateResult>('/api/admin/integration/google/validate', {
+        method: 'POST',
+      });
+      if (result.ok) {
+        showToast(result.message || 'Google OAuth 配置验证通过');
+      } else {
+        setError(result.error || '验证失败');
+        if (result.detail) {
+          showToast(result.detail);
+        }
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '验证请求失败');
+    } finally {
+      setValidatingGoogle(false);
+    }
+  }
+
   async function validateMicrosoft() {
-    setValidating(true);
+    setValidatingMicrosoft(true);
     setError(null);
     try {
       const result = await api<ValidateResult>('/api/admin/integration/microsoft/validate', {
@@ -241,7 +268,7 @@ export function AdminIntegrationPage() {
     } catch (e) {
       setError(e instanceof Error ? e.message : '验证请求失败');
     } finally {
-      setValidating(false);
+      setValidatingMicrosoft(false);
     }
   }
 
@@ -300,7 +327,16 @@ export function AdminIntegrationPage() {
                 title="Google OAuth"
                 desc="Client ID 与 Client Secret 为必填；Redirect URI 可选。"
                 status={{ on: google.enabled }}
-              />
+              >
+                <button
+                  type="button"
+                  className="validate-chip"
+                  disabled={validatingGoogle || !google.enabled}
+                  onClick={validateGoogle}
+                >
+                  {validatingGoogle ? '…' : '验证'}
+                </button>
+              </IntegrationCardHead>
               <div className="integration-form-grid">
                 <div className="config-field">
                   <label htmlFor="google-client-id">Client ID</label>
@@ -341,7 +377,16 @@ export function AdminIntegrationPage() {
                 title="Microsoft"
                 desc="在本页面配置 Microsoft 登录，不依赖 wrangler/env。"
                 status={{ on: microsoft.enabled }}
-              />
+              >
+                <button
+                  type="button"
+                  className="validate-chip"
+                  disabled={validatingMicrosoft || !microsoft.enabled}
+                  onClick={validateMicrosoft}
+                >
+                  {validatingMicrosoft ? '…' : '验证'}
+                </button>
+              </IntegrationCardHead>
               <div className="integration-form-grid">
                 <div className="config-field">
                   <label htmlFor="ms-tenant">Tenant ID</label>
@@ -384,16 +429,6 @@ export function AdminIntegrationPage() {
                   Secret {microsoft.clientSecretSet ? '已配置（默认掩码显示）' : '未配置'}
                 </p>
               )}
-              <div className="integration-validate-row">
-                <button
-                  type="button"
-                  className="btn"
-                  disabled={validating || !microsoft.enabled}
-                  onClick={validateMicrosoft}
-                >
-                  {validating ? '验证中…' : '验证配置'}
-                </button>
-              </div>
             </article>
           </>
         )}
