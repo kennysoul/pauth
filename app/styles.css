@@ -224,7 +224,8 @@ button.warn,
 .admin-layout {
   display: grid;
   grid-template-columns: var(--layout-left-width) 1fr;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 
 .admin-nav {
@@ -234,6 +235,7 @@ button.warn,
   display: flex;
   flex-direction: column;
   gap: 14px;
+  overflow-y: auto;
 }
 
 .admin-nav-user {
@@ -302,6 +304,11 @@ button.warn,
   margin-top: auto;
   padding-top: 12px;
   border-top: 1px solid var(--line);
+}
+
+.admin-nav,
+.admin-main {
+  min-height: 0;
 }
 
 .admin-main {
@@ -1307,11 +1314,14 @@ td {
 
   .admin-layout {
     grid-template-columns: 1fr;
+    height: auto;
+    overflow: visible;
   }
 
   .admin-nav {
     border-right: none;
     border-bottom: 1px solid var(--line);
+    overflow-y: visible;
   }
 }
 
