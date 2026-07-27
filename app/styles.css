@@ -1310,6 +1310,7 @@ td {
 .secret-input-wrap input {
   flex: 1;
   min-width: 0;
+  margin-bottom: 0;
 }
 
 .page-header .sub.integration-subtitle {

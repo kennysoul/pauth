@@ -702,6 +702,14 @@ adminRoutes.get('/audit-logs', async (c) => {
   return c.json(rows);
 });
 
+adminRoutes.delete('/audit-logs', async (c) => {
+  const actor = c.get('user');
+  const db = getDb(c.env);
+  await writeAuditLog(c.env, actor.id, 'AUDIT_CLEAR', null, { clearedBy: actor.email });
+  await db.delete(auditLogs);
+  return c.json({ ok: true });
+});
+
 adminRoutes.post('/system/reset', async (c) => {
   const body = await c.req.json<{ confirmation?: string }>();
   if (body.confirmation !== 'RESET_ALL_I_UNDERSTAND') {

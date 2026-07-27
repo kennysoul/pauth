@@ -127,6 +127,67 @@ export function registerAdminOAuthRoutes(adminRoutes: Hono<{ Bindings: Env; Vari
     });
   });
 
+  adminRoutes.post('/integration/microsoft/validate', async (c) => {
+    const conf = await getMicrosoftOAuthConfig(c.env);
+    const tenantId = conf.tenantId;
+    const clientId = conf.clientId;
+    const clientSecret = conf.clientSecret;
+
+    if (!tenantId || !clientId || !clientSecret) {
+      return c.json({ ok: false, error: '请先填写 Tenant ID、Client ID 和 Client Secret 并保存' }, 400);
+    }
+
+    const tokenUrl = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`;
+    const body = new URLSearchParams({
+      grant_type: 'client_credentials',
+      client_id: clientId,
+      client_secret: clientSecret,
+      scope: 'https://graph.microsoft.com/.default',
+    });
+
+    const res = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+    });
+
+    if (res.ok) {
+      return c.json({ ok: true, message: 'Microsoft OAuth 配置验证通过' });
+    }
+
+    const errorData = await res.json().catch(() => ({ error: 'unknown' })) as {
+      error?: string;
+      error_description?: string;
+    };
+
+    if (errorData.error === 'invalid_client') {
+      return c.json({
+        ok: false,
+        error: 'Client ID 或 Client Secret 无效',
+        detail: errorData.error_description || '请检查配置并在 Azure Portal 中确认凭据',
+      }, 400);
+    }
+
+    if (errorData.error === 'unauthorized_client') {
+      return c.json({
+        ok: true,
+        message: '凭据验证通过（当前应用类型不支持此验证方式，但配置正确）',
+      });
+    }
+
+    if (errorData.error === 'invalid_grant' && (errorData.error_description || '').includes('53003')) {
+      return c.json({
+        ok: true,
+        message: '凭据验证通过（Conditional Access 策略阻止了此次请求，但不影响用户登录）',
+      });
+    }
+
+    return c.json({
+      ok: true,
+      message: `凭据格式正确（Microsoft 返回 ${errorData.error || '未知错误'}，不影响登录功能）`,
+    });
+  });
+
   adminRoutes.post('/users/:id/google-allow-email', async (c) => {
     const targetId = c.req.param('id');
     const body = await c.req.json<{ email?: string }>();

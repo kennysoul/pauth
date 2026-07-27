@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api, type GoogleIntegration, type MicrosoftIntegration, type WebAuthIntegration } from '../../api';
+import { api, type GoogleIntegration, type MicrosoftIntegration, type ValidateResult, type WebAuthIntegration } from '../../api';
 import { useToast } from '../../components/useToast';
 
 type GoogleForm = {
@@ -129,6 +129,7 @@ export function AdminIntegrationPage() {
   const { showToast, toastEl } = useToast();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [validating, setValidating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [webauth, setWebauth] = useState<WebAuthIntegration | null>(null);
   const [google, setGoogle] = useState<GoogleForm>({
@@ -219,6 +220,28 @@ export function AdminIntegrationPage() {
       setError(e instanceof Error ? e.message : '保存失败');
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function validateMicrosoft() {
+    setValidating(true);
+    setError(null);
+    try {
+      const result = await api<ValidateResult>('/api/admin/integration/microsoft/validate', {
+        method: 'POST',
+      });
+      if (result.ok) {
+        showToast(result.message || 'Microsoft OAuth 配置验证通过');
+      } else {
+        setError(result.error || '验证失败');
+        if (result.detail) {
+          showToast(result.detail);
+        }
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '验证请求失败');
+    } finally {
+      setValidating(false);
     }
   }
 
@@ -361,6 +384,16 @@ export function AdminIntegrationPage() {
                   Secret {microsoft.clientSecretSet ? '已配置（默认掩码显示）' : '未配置'}
                 </p>
               )}
+              <div className="integration-validate-row">
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={validating || !microsoft.enabled}
+                  onClick={validateMicrosoft}
+                >
+                  {validating ? '验证中…' : '验证配置'}
+                </button>
+              </div>
             </article>
           </>
         )}

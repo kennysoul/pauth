@@ -166,6 +166,13 @@ export type BackupPreview = {
   registrationEnabled: boolean;
 };
 
+export type ValidateResult = {
+  ok: boolean;
+  message?: string;
+  error?: string;
+  detail?: string;
+};
+
 export type BackupExportResult = {
   ok: boolean;
   filename: string;
