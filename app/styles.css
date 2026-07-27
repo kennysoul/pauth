@@ -131,7 +131,7 @@ button:disabled,
 
 button.primary,
 .btn.primary,
-button:not(.secondary):not(.credential-btn):not(.icon-btn):not(.link-btn):not(.link-copy):not(.nav-item):not(.danger):not(.warn):not(.l1-chip) {
+button:not(.secondary):not(.credential-btn):not(.icon-btn):not(.link-btn):not(.link-copy):not(.nav-item):not(.danger):not(.warn):not(.l1-chip):not(.secret-visibility-btn) {
   border-color: rgba(250, 45, 85, 0.55);
   color: #ffe8ed;
   background: linear-gradient(180deg, #e43d5f, #c7244a);
@@ -139,7 +139,7 @@ button:not(.secondary):not(.credential-btn):not(.icon-btn):not(.link-btn):not(.l
 
 button.primary:hover,
 .btn.primary:hover,
-button:not(.secondary):not(.credential-btn):not(.icon-btn):not(.link-btn):not(.link-copy):not(.nav-item):not(.danger):not(.warn):hover {
+button:not(.secondary):not(.credential-btn):not(.icon-btn):not(.link-btn):not(.link-copy):not(.nav-item):not(.danger):not(.warn):not(.secret-visibility-btn):hover {
   filter: brightness(1.04);
 }
 
