@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, type GoogleIntegration, type MicrosoftIntegration, type ValidateResult, type WebAuthIntegration } from '../../api';
 import { useToast } from '../../components/useToast';
 
@@ -37,31 +37,22 @@ function SecretField({
   secretSet: boolean;
 }) {
   const [visible, setVisible] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  function toggleVisibility() {
-    const input = inputRef.current;
-    if (!input) return;
-    const newVisible = !visible;
-    setVisible(newVisible);
-    input.type = newVisible ? 'text' : 'password';
-  }
 
   return (
     <div className="secret-input-wrap">
       <input
-        ref={inputRef}
         id={id}
-        type="password"
+        type="text"
+        className={visible ? '' : 'secret-mask'}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder={secretSet ? '********' : '未配置请填写 Client Secret'}
+        placeholder={secretSet && !visible ? '********' : '未配置请填写 Client Secret'}
         autoComplete="new-password"
       />
       <button
         type="button"
         className={`secret-visibility-btn${visible ? ' is-visible' : ''}`}
-        onClick={toggleVisibility}
+        onClick={() => setVisible((v) => !v)}
         aria-label={visible ? '隐藏 Secret' : '显示 Secret'}
         title={visible ? '隐藏 Secret' : '显示 Secret'}
       >
@@ -211,8 +202,8 @@ export function AdminIntegrationPage() {
           }),
         }),
       ]);
-      const gForm = toGoogleForm(gRes);
-      const mForm = toMicrosoftForm(mRes);
+      const gForm = { ...toGoogleForm(gRes), clientSecret: google.clientSecret };
+      const mForm = { ...toMicrosoftForm(mRes), clientSecret: microsoft.clientSecret };
       setGoogle(gForm);
       setMicrosoft(mForm);
       setBaseline((prev) => ({

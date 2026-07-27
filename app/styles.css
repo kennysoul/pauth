@@ -1340,6 +1340,12 @@ td {
   padding-right: 36px;
 }
 
+.secret-mask {
+  -webkit-text-security: disc;
+  -moz-text-security: disc;
+  text-security: disc;
+}
+
 .secret-visibility-btn {
   position: absolute;
   right: 9px;
