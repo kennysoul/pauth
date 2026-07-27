@@ -1338,6 +1338,10 @@ td {
   margin-bottom: 0;
 }
 
+.secret-mask {
+  -webkit-text-security: disc;
+}
+
 .page-header .sub.integration-subtitle {
   margin-bottom: 0;
 }

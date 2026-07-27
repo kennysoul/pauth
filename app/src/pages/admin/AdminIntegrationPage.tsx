@@ -40,12 +40,12 @@ function SecretField({
   return (
     <div className="secret-input-wrap">
       <input
-        key={String(visible)}
         id={id}
-        type={visible ? 'text' : 'password'}
+        type="text"
+        className={visible ? '' : 'secret-mask'}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder={secretSet ? '********' : '未配置请填写 Client Secret'}
+        placeholder={secretSet && !visible ? '********' : '未配置请填写 Client Secret'}
         autoComplete="new-password"
       />
       <button
