@@ -40,18 +40,22 @@ Open `https://auth.<your-domain>/setup` (via your reverse proxy) or http://127.0
 
 1. Visit `/setup` — register Passkey for the fixed **root** bootstrap admin (name is always `root`)
 2. Admin panel at `/admin`
-3. Enable self-registration in **用户管理** (toggle at top of user list)
-4. Register a test user at `/register` — approve in **用户管理**
+3. Create a user in **用户管理** (name + optional email)
+4. Generate an **激活链接** (activation link) for that user — they open it and complete activation via Passkey, Google, or Microsoft
 
 ### Admin console
 
 | Page | Purpose |
 |------|---------|
-| 用户管理 | Users, open registration toggle, L1 grants, Passkey/OAuth per user, Passkey delegate links |
+| 用户管理 | Users, activation links, L1 grants, Passkey per user (read-only Google/Microsoft status for others; self-service only) |
 | 应用管理 | OAuth clients (L2 / L1+L2) |
 | 集成与安全 | Google / Microsoft OAuth, WEBAUTH runtime display |
 | 系统设置 | Encrypted backup export/import, factory reset |
 | 审计日志 | Audit trail |
+
+### Self-service account page
+
+Regular users (and admins managing their own account) land on `/me/profile` — a sidebar layout mirroring the admin console, with a **用户信息** section: edit name/email, manage own Passkeys, and bind/unbind own Google/Microsoft identity. Nobody (including admins) can bind or unbind another user's OAuth identity — only the account holder.
 
 ### Root bootstrap admin
 
@@ -75,9 +79,13 @@ API: `POST /api/admin/backup/export|preview|import` (admin session required).
 |--------|------|---------|
 | POST | `/api/login/logout` | End session; clear `sid` cookie (admin UI uses this) |
 
-### Passkey delegate (admin-assisted registration)
+### Account activation (new user / identity reset)
 
-Admins generate a one-time link from **用户管理 → Passkey → 代注册**. User opens `/link-device?t=<token>` and registers a Passkey via `/api/passkey-delegate/:token/*`.
+Admin generates an **激活链接** (activation link) from **用户管理** for a pending user, or to let an already-active user add/reset an identity. The link is valid for 15 minutes and can be opened up to 3 times; only one active link exists per user at a time. Opening it lets the user complete activation via **any one of**: Passkey registration, Google OAuth, or Microsoft OAuth. `POST /api/admin/users/:id/complete-link`, consumed via `/api/complete/:token/*`.
+
+### Passkey delegate (admin-assisted, additional device)
+
+Separate from account activation above: admins generate a one-time link from **用户管理 → Passkey** so an existing user can register an *additional* Passkey from another device. User opens `/link-device?t=<token>` and registers a Passkey via `/api/passkey-delegate/:token/*`.
 
 ### Smoke test (API only)
 
@@ -305,7 +313,7 @@ npm run deploy:full -- --yes auth.example.com
 
 ```bash
 ./scripts/full-deploy-cloudflare.sh --yes auth.example.com
-./scripts/full-deploy-cloudflare.sh --yes auth.cdnc.us
+./scripts/full-deploy-cloudflare.sh --yes auth.example2.com
 ```
 
 #### 高级选项（可选）
@@ -443,7 +451,7 @@ Still required: Node.js 20+, git, python3, curl, and Cloudflare auth (`npx wrang
 | File | Purpose | Git |
 |------|---------|-----|
 | `wrangler.jsonc` | Deploy badge / Workers Builds (`npm run deploy:workers`) | commit after provision |
-| `wrangler.cdnc-us.jsonc` | Manual deploy to auth.cdnc.us | gitignored (public repo) |
+| `wrangler.<slug>.jsonc` (e.g. `wrangler.example2-com.jsonc`) | Manual deploy to an additional auth domain | gitignored (public repo) |
 | `wrangler.local.jsonc` | Local `wrangler deploy` / dev | gitignored |
 
 When a config file already exists, the script prompts: **保留** / **仅同步 D1/KV** / **完全覆盖**.
@@ -461,12 +469,12 @@ For auto-deploy via Cloudflare Workers Builds:
 5. Keep `SESSION_SECRET` in Cloudflare Secrets only (from `.dev.vars` after provision)
 6. `deploy:workers` includes remote D1 migrations
 
-> Only one worker per repo can use Workers Builds (it reads `wrangler.jsonc` at repo root). Additional workers (e.g. cdnc-us) must be deployed manually.
+> Only one worker per repo can use Workers Builds (it reads `wrangler.jsonc` at repo root). Additional workers (secondary domains) must be deployed manually.
 
-For cdnc-us manual deploy:
+For a secondary domain's manual deploy:
 
 ```bash
-npm run build && npx wrangler deploy --config wrangler.cdnc-us.jsonc
+npm run build && npx wrangler deploy --config wrangler.<slug>.jsonc
 ```
 
 ### Manual deploy (existing checkout)

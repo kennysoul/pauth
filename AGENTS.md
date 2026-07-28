@@ -2,7 +2,7 @@
 
 ## Project overview
 
-Cloudflare Workers app (Hono + D1 + KV) with a React SPA frontend (Vite). Central passkey-only authentication service providing L1 (forward_auth for Caddy) and L2 (OAuth2 for apps).
+Cloudflare Workers app (Hono + D1 + KV) with a React SPA frontend (Vite). Central passkey-only authentication service providing L1 (forward_auth for Caddy) and L2 (OAuth2 for apps). Identity is **Passkey / Google / Microsoft only** — there is no password login and no open self-registration. All accounts are created by an admin and activated by the account holder.
 
 ## Key commands
 
@@ -35,49 +35,52 @@ npx tsc --noEmit
 
 | File | Purpose | Git |
 |------|---------|-----|
-| `wrangler.jsonc` | Workers Builds (auth.kass.cc) | committed |
+| `wrangler.jsonc` | Workers Builds (primary auth domain) | committed |
 | `wrangler.production.jsonc` | Alternative Workers Builds config | from `.example`, committed after provision |
-| `wrangler.cdnc-us.jsonc` | Manual deploy (auth.cdnc.us) | gitignored (public repo) |
 | `wrangler.local.jsonc` | Local dev | gitignored |
+| `wrangler.<name>.jsonc` (e.g. secondary manual-deploy domains) | Manual deploy to additional auth domains | gitignored (public repo) |
 
-All wrangler commands need `--config <file>` to target the right config. Never run wrangler without it.
+All wrangler commands need `--config <file>` to target the right config. Never run wrangler without it. Each additional auth domain gets its own gitignored `wrangler.<slug>.jsonc` — never commit these (they contain real D1/KV resource IDs tied to a specific domain).
 
 ### Directory layout
 
 | Path | Purpose |
 |------|---------|
 | `src/index.ts` | Worker entrypoint (Hono router) |
-| `src/lib/` | DB, session, webauthn, backup, OAuth helpers |
+| `src/lib/` | DB, session, webauthn, backup, OAuth, activation-link helpers |
 | `src/routes/` | API route handlers |
 | `src/middleware/auth.ts` | `requireAuth` + `requireAdmin` middleware |
 | `src/types.ts` | `Env`, `User`, `SessionRow`, `AuthContext`, `StoredChallenge` |
 | `app/` | React SPA (Vite root, outputs to `dist/`) |
+| `app/src/pages/admin/` | Admin console (users, clients, integration, config, logs) |
+| `app/src/pages/me/` | Self-service account pages (`MeLayout` + `MeProfilePage`), same sidebar layout style as admin |
 | `migrations/` | D1 SQL migrations (numbered order) |
 
 ### Bindings
 
-- **D1** (`DB`) — 15 tables: users, passkeys, sessions, audit_logs, clients, OAuth tables, etc.
+- **D1** (`DB`) — users, passkeys, sessions, audit_logs, clients, OAuth tables, `complete_links` (activation links), etc.
 - **KV** (`CHALLENGES`) — WebAuthn challenge storage (60s TTL) and OAuth anti-CSRF state
 - **Assets** (`ASSETS`) — serves `dist/` with SPA fallback
 - **Secrets** — `SESSION_SECRET` (HMAC cookie signing, stored in `.dev.vars` for local / Cloudflare Secrets for prod)
 
 ### Session model
 
-Three cookie types with different paths and TTLs:
+Cookie types with different paths and TTLs:
 - `sid` — normal authenticated session (path `/`)
 - `setup_sid` — first-time setup session (path `/api/setup`, TTL: `SETUP_TTL_SECONDS`)
-- `reg_sid` — self-registration session (path `/api`, TTL: `SETUP_TTL_SECONDS`)
 
 Cookies are HMAC-SHA-256 signed (`sessionId.signature`). Sessions are stored server-side in D1 with a `kind` column.
 
 ### Auth flows
 
 - **Setup**: First admin (`root`) registers passkey → system transitions `NEEDS_SETUP → ACTIVE`
-- **Login**: WebAuthn authentication challenge (KV, 60s) → verify → session cookie
-- **Registration**: Gated by `registrationEnabled` system config toggle. New users land in `pending` status.
-- **Admin user creation**: Admin creates user with optional email. If omitted, auto-generates `username@domain` (derived from `ORIGIN`). Duplicate names get numbered suffix.
-- **Invites**: Admin-generated token (7-day TTL) → invitee registers passkey → auto-activates
-- **Passkey delegate**: Admin generates 600s token for a user to register an additional passkey without logging in
+- **Login**: WebAuthn authentication challenge (KV, 60s) → verify → session cookie. Login page offers three equal-weight options: Passkey, Google, Microsoft.
+- **No open registration**: there is no `/register` route and no `registrationEnabled` toggle. All users are created by an admin.
+- **Admin user creation**: Admin creates user (name, optional email) with `status: 'pending'`. If email is omitted, auto-generates `username@domain` (derived from `ORIGIN`; used only for OIDC email-claim matching, unrelated to Google/Microsoft identity). Duplicate names get numbered suffix.
+- **Activation (`complete_links` table)**: Admin generates a one-time activation link for a pending (or already-active, for identity reset) user from **用户管理**. The link is valid 15 minutes, can be opened at most 3 times, and only one active link exists per user at a time (generating a new one invalidates the previous one). The user opens the link and completes activation via **any one of**: Passkey registration, Google OAuth, or Microsoft OAuth. Completing any one of them sets `status: 'active'` and consumes the link. See `src/lib/complete.ts` + `src/routes/complete.ts` + `app/src/pages/CompletePage.tsx`.
+- **OAuth binding is self-service only**: a user (including admins) can only bind/rebind/unbind their **own** Google/Microsoft identity — via `/me/profile` for regular users, or the same icon-click flow in `AdminUsersPage` for an admin's own row. Admins **cannot** bind or unbind OAuth identities on behalf of other users (`handleBindMode` / `authorizeBindStart` in `src/routes/oauth.ts` and the `DELETE /api/admin/users/:id/{google,microsoft}-link` endpoints all enforce `targetId === operator.id`). Viewing another user's Google/Microsoft icon in the admin list is read-only.
+- **Passkey delegate** (`/link-device`): Admin generates a 600s one-time token so any user (already pending or active) can register an *additional* Passkey from another device via QR/link, without a full activation flow. Separate from the `complete_links` mechanism above.
+- **Legacy invite flow** (`src/routes/invite.ts`, `app/src/pages/InvitePage.tsx`, `POST /api/admin/invites`): still present in the codebase but **no longer wired into the admin UI** — superseded by the `complete_links` activation mechanism. Treat as dead code unless explicitly revived.
 - **Social OAuth**: Google + Microsoft login/bind. Email normalization for Gmail (dots stripped).
 - **L2 OAuth2**: Full authorization_code flow for third-party clients
 
@@ -95,10 +98,11 @@ AES-256-GCM + PBKDF2 (100k iterations, Workers Web Crypto API limit). Root user 
 - **`tsc --noEmit` must pass** — all TypeScript errors were fixed. Keep it clean.
 - **Passkey flows require a real browser** — platform authenticator or security key. API-only smoke tests can't exercise registration/login.
 - **`SESSION_SECRET`** must be ≥32 chars and never committed (`.dev.vars` is gitignored)
-- **`wrangler.cdnc-us.jsonc`** must not be committed (public repo, contains D1/KV IDs). Deploy manually: `npm run build && npx wrangler deploy --config wrangler.cdnc-us.jsonc`
+- **Additional-domain wrangler configs must not be committed** (public repo, contains real D1/KV IDs). Deploy manually: `npm run build && npx wrangler deploy --config wrangler.<slug>.jsonc`
 - **Forward auth** (`/api/verify`) returns 302 (not 401) when unauthenticated — Caddy's `forward_auth` directive handles this correctly
 - **Migrations run separately**: `db:migrate:local` before local dev, `db:migrate:remote:workers` is bundled into `deploy:workers`
-- **Email field**: users have an email (unique). Admin sets it on creation (optional — auto-generates `username@domain` if blank). Users can edit their own email via `PUT /me/email`. Admin can edit any user's email. Used by OIDC RPs (e.g. Immich) for user matching.
+- **Email field**: users have an email (unique) used **only** for OIDC relying-party matching (e.g. Immich) — it has no relationship to the Google/Microsoft identity used for login. Admin sets it on creation (optional — auto-generates `username@domain` if blank). Users can edit their own email via `PUT /me/email`. Admin can edit any user's email.
+- **Global button styling**: `button`/`.btn` base rules were unified to match the `.credential-btn` look (dark navy fill `#121f36`, `#3e4c69` border) used in **用户管理**. Any new page should rely on the shared base styles rather than introducing a new button look.
 - **Deploy scripts** (`scripts/`) handle full provisioning (D1, KV, secrets, domain binding) from just an auth hostname. `npm run deploy:full` calls `scripts/full-deploy-cloudflare.sh`. Use these for greenfield deploys; manual `wrangler deploy` for updates to an existing Worker.
 
 ## OIDC / generic SSO support
