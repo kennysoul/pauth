@@ -172,6 +172,21 @@ export function AdminIntegrationPage() {
         const cached = localStorage.getItem('pauth-microsoft-secret');
         if (cached) mForm.clientSecret = cached;
       }
+      // 预加载明文 secret（仅当后端有配置且前端 value 仍为空）
+      const [gSecret, mSecret] = await Promise.all([
+        g.clientSecretSet && !gForm.clientSecret
+          ? api<{ clientSecret: string }>('/api/admin/integration/google/secret')
+              .then((r) => r.clientSecret)
+              .catch(() => '')
+          : Promise.resolve(gForm.clientSecret),
+        m.clientSecretSet && !mForm.clientSecret
+          ? api<{ clientSecret: string }>('/api/admin/integration/microsoft/secret')
+              .then((r) => r.clientSecret)
+              .catch(() => '')
+          : Promise.resolve(mForm.clientSecret),
+      ]);
+      gForm.clientSecret = gSecret;
+      mForm.clientSecret = mSecret;
       setWebauth(w);
       setGoogle(gForm);
       setMicrosoft(mForm);

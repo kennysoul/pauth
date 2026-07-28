@@ -46,6 +46,11 @@ export function registerAdminOAuthRoutes(adminRoutes: Hono<{ Bindings: Env; Vari
     });
   });
 
+  adminRoutes.get('/integration/google/secret', async (c) => {
+    const conf = await getGoogleOAuthConfig(c.env);
+    return c.json({ clientSecret: conf.clientSecret });
+  });
+
   adminRoutes.post('/integration/google', async (c) => {
     const body = await c.req.json<{
       clientId?: string;
@@ -141,6 +146,11 @@ export function registerAdminOAuthRoutes(adminRoutes: Hono<{ Bindings: Env; Vari
       clientSecretSet: Boolean(conf.clientSecret),
       enabled: conf.enabled,
     });
+  });
+
+  adminRoutes.get('/integration/microsoft/secret', async (c) => {
+    const conf = await getMicrosoftOAuthConfig(c.env);
+    return c.json({ clientSecret: conf.clientSecret });
   });
 
   adminRoutes.post('/integration/microsoft', async (c) => {
