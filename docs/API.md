@@ -15,7 +15,9 @@ Route index for the **implemented** pauth Worker API. Replace `https://auth.exam
 | **L1** | `GET /api/verify` | Gateway forward-auth (Caddy). Requires session + `active` user + L1 grant. |
 | **OAuth L2** | `/api/l2/*` | Application login (authorization code). Apps register a Client ID. |
 | **Social login** | `/api/oauth/*` | Google / Microsoft sign-in on the auth host (not app OAuth). |
-| **Passkey delegate** | `/api/passkey-delegate/*` | One-time admin link for registering a Passkey on another device. |
+| **Passkey delegate** | `/api/passkey-delegate/*` | One-time admin link so an existing user can register an *additional* Passkey on another device. |
+| **Account activation** | `/api/complete/*` | One-time admin link for activating a new user (or letting an active user add/reset an identity). Supports Passkey, Google, or Microsoft. |
+| **Invite (legacy)** | `/api/invite/*` | Older invite flow; still served but **no longer wired into the admin UI** — superseded by `/api/complete/*`. Treat as dead code unless explicitly revived. |
 
 ---
 
@@ -27,12 +29,10 @@ Route index for the **implemented** pauth Worker API. Replace `https://auth.exam
 | cookie | Valid `sid` cookie; user `status === active` |
 | admin | cookie + `role === admin` |
 | setup | Valid `setup_sid` cookie (bootstrap only) |
-| register | Valid `reg_sid` cookie (self-register or invite flow) |
-| Bearer | `Authorization: Bearer <access_token>` from L2 token exchange |
 
 **CSRF:** Mutating `/api/*` requests check `Origin` (server-to-server L2 token calls may omit Origin).
 
-**Cookies:** `sid` (session), `setup_sid` (bootstrap), `reg_sid` (registration). See [`cf-passkey-auth-v3.md` §8](../cf-passkey-auth-v3.md).
+**Cookies:** `sid` (normal authenticated session), `setup_sid` (bootstrap only). Sessions are HMAC-SHA-256 signed and stored server-side in D1 with a `kind` column. There is no longer a `reg_sid` cookie — see the **Account activation** section below.
 
 ---
 
@@ -40,7 +40,7 @@ Route index for the **implemented** pauth Worker API. Replace `https://auth.exam
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/api/system/state` | — | `{ state, registrationEnabled, origin }` |
+| GET | `/api/system/state` | — | `{ state, origin }` (no `registrationEnabled` — open self-registration is not supported) |
 | GET | `/api/verify` | cookie† | L1 gateway check. **200** + `X-Auth-User-*` or **302** → `/login?return_to=...` |
 
 † Requires L1 grant (`user_l1_access.enabled`). Used by Caddy `forward_auth`, not browser navigation.
@@ -71,21 +71,40 @@ Login rejects `pending` / `disabled` users. `return_to` in verify body must pass
 
 ---
 
-## Self-registration
+## Account activation (`/api/complete/*`)
 
-Requires `state === ACTIVE` and `registrationEnabled === true`. New users stay **`pending`** until admin approval.
+Admin creates a user (pending) and generates a **completion link**. The user opens the link and activates via **any one of**: Passkey registration, Google OAuth, or Microsoft OAuth. Each user has at most one active link at a time; generating a new one invalidates the previous one.
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| POST | `/api/register/begin` | — | `{ name, email }` → creates pending user; sets `reg_sid` |
-| POST | `/api/register/passkey/options` | register | WebAuthn registration options |
-| POST | `/api/register/passkey/verify` | register | Save Passkey; status stays `pending`; clears `reg_sid` |
+| GET | `/api/complete/:token` | — | `{ name, role, status, expiresAt, openCount, maxOpens }` — also increments `openCount` (hard cap = 3) |
+| POST | `/api/complete/:token/passkey/options` | — | WebAuthn registration options |
+| POST | `/api/complete/:token/passkey/verify` | — | Save Passkey; `status → active` if pending; mark token used |
+
+OAuth activation (`mode=register`) flows through `/api/oauth/{google,microsoft}/start?mode=register&complete_token=...` → callback → activates user (if pending) and binds the identity in one step. The same `sub` may not be bound to two users at once.
+
+Frontend: `/complete/:token`
 
 ---
 
-## Invites
+## Passkey delegate (`/api/passkey-delegate/*`)
 
-Admin-created invite links. User becomes **`active`** after Passkey registration (no second approval).
+Separate from activation above: an **existing** user opens the link to register an *additional* Passkey on a new device. Status does not change (the user is already active). Does **not** consume a token until the user actually registers.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/passkey-delegate/:token` | — | `{ name, valid }` |
+| POST | `/api/passkey-delegate/:token/options` | — | WebAuthn registration options |
+| POST | `/api/passkey-delegate/:token/verify` | — | Add Passkey to target user; mark token used |
+
+Admin: `POST /api/admin/users/:id/passkeys/delegate` → `{ token, link, expiresIn }`  
+Frontend: `/link-device?t=<token>`
+
+---
+
+## Invites (legacy, kept for backwards compatibility)
+
+Admin-created invite links. User becomes **`active`** after Passkey registration (no second approval). **No longer wired into the admin UI** — superseded by `/api/complete/*`.
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
@@ -98,22 +117,9 @@ Frontend: `/invite/:token`
 
 ---
 
-## Passkey delegate
-
-Admin generates a one-time link from **用户管理 → Passkey → 代注册**.
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | `/api/passkey-delegate/:token` | — | `{ name, valid }` |
-| POST | `/api/passkey-delegate/:token/options` | — | WebAuthn registration options |
-| POST | `/api/passkey-delegate/:token/verify` | — | Add Passkey to target user; invalidates token |
-
-Admin: `POST /api/admin/users/:id/passkeys/delegate` → `{ token, link, expiresIn }`  
-Frontend: `/link-device?t=<token>`
-
----
-
 ## Current user (`/api/me`)
+
+Self-service account management. **All OAuth link/unlink endpoints enforce self-service only** — the `targetId` must match the caller's own user id; the server rejects any attempt to bind or unbind on behalf of another user (including admin attempting to bind/unlink another user's OAuth).
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
@@ -121,7 +127,12 @@ Frontend: `/link-device?t=<token>`
 | GET | `/api/me/passkeys` | cookie | List own Passkeys |
 | POST | `/api/me/passkeys/options` | cookie | Add Passkey — options |
 | POST | `/api/me/passkeys/verify` | cookie | Add Passkey — verify |
-| DELETE | `/api/me/passkeys/:id` | cookie | Delete Passkey (must keep ≥1) |
+| DELETE | `/api/me/passkeys/:id` | cookie | Delete Passkey (must keep ≥1 identity: Passkey or OAuth) |
+| PUT | `/api/me/name` | cookie | Update own display name |
+| PUT | `/api/me/email` | cookie | Update own email (used for OIDC RP matching) |
+| GET | `/api/me/oauth` | cookie | `{ googleLinked, googleEmail, microsoftLinked, microsoftEmail, hasPasskey, ... }` |
+| DELETE | `/api/me/oauth/google-link` | cookie | Unlink own Google (must keep ≥1 identity) |
+| DELETE | `/api/me/oauth/microsoft-link` | cookie | Unlink own Microsoft (must keep ≥1 identity) |
 
 ---
 
@@ -163,64 +174,63 @@ PAUTH_TOKEN_URL=<ORIGIN>/api/l2/token
 
 ## Social login (Google / Microsoft)
 
-Configured in admin **集成与安全**. Used by `/login` and account linking.
+Configured in admin **集成与安全**. Used by `/login`, account activation, and `/me` self-service linking.
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | GET | `/api/oauth/google/public-status` | — | `{ enabled }` |
 | GET | `/api/oauth/microsoft/public-status` | — | `{ enabled }` |
-| GET | `/api/oauth/google/start` | — | Redirect to Google. Query: `mode=login|bind`, `next=` |
+| GET | `/api/oauth/google/start` | — | Redirect to Google. Query: `mode=login\|bind\|register`, `next=`, optionally `complete_token=` |
 | GET | `/api/oauth/google/callback` | — | OAuth callback (browser) |
 | GET | `/api/oauth/microsoft/start` | — | Redirect to Microsoft |
 | GET | `/api/oauth/microsoft/callback` | — | OAuth callback (browser) |
 
-Per-user allow-list and unlink: admin routes under `/api/admin/users/:id/google-*` and `microsoft-*`.
+`mode=login` — sign in (legacy + activation). `mode=bind` — link to current session (self-service `/me`). `mode=register` — bind during activation via `/complete/:token`. All bind/register flows reject sub reuse across users.
 
 ---
 
 ## Admin (`/api/admin/*`)
 
-All routes require **admin** session unless noted.
-
-### System config
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/admin/config` | `{ state, registrationEnabled }` |
-| PATCH | `/api/admin/config` | `{ registrationEnabled }` — UI toggle also on **用户管理** |
+All routes require **admin** session unless noted. Admins can create users, generate activation links, manage clients, and configure OAuth providers — but **cannot** bind or unbind another user's Google/Microsoft identity.
 
 ### Users
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/admin/users` | List users. Query: `?status=pending\|active\|disabled` |
-| POST | `/api/admin/users` | Create user |
-| PATCH | `/api/admin/users/:id` | Update `name` and/or `status` (approve/disable). **root** protected |
-| DELETE | `/api/admin/users/:id` | Delete user. Cannot delete self, **root**, or last active admin |
+| POST | `/api/admin/users` | Create user (`status: pending`); returns `{ userId }` |
+| PATCH | `/api/admin/users/:id` | Update `name` / `email` / `status` (approve/disable). **root** protected. Email changes don't affect OAuth identity. |
+| DELETE | `/api/admin/users/:id` | Delete user (cascade: passkeys / oauth_identities / sessions / complete_links / user_l1_access / user_client_access / invites). Cannot delete self, **root**, or last active admin |
 | PUT | `/api/admin/users/:id/permissions` | `{ l1Enabled }` — only pauth-managed permission |
+| POST | `/api/admin/users/:id/complete-link` | Generate (or regenerate) activation link. Returns `{ completeUrl, completeToken, expiresAt, ttlSeconds }`. Old tokens for the same user are voided. |
 
-### User Passkeys
+### User Passkeys (read-only listing; admin cannot bind)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/admin/users/:id/passkeys` | List user's Passkeys |
-| POST | `/api/admin/users/:id/passkeys/delegate` | Generate one-time `/link-device` URL |
+| GET | `/api/admin/users/:id/passkeys` | List user's Passkeys (no secret material) |
 | DELETE | `/api/admin/users/:id/passkeys/:pkId` | Delete user's Passkey |
 
-### User social OAuth (allow-list / unlink)
+### Passkey delegate link
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/admin/users/:id/google-allow-email` | Set allowed Google email |
-| POST | `/api/admin/users/:id/microsoft-allow-email` | Set allowed Microsoft email |
-| DELETE | `/api/admin/users/:id/google-link` | Unlink Google |
-| DELETE | `/api/admin/users/:id/microsoft-link` | Unlink Microsoft |
+| POST | `/api/admin/users/:id/passkeys/delegate` | Generate one-time `/link-device` URL (10-minute TTL). Returns `{ token, link, expiresIn }` |
 
-### Invites
+### Invites (legacy, not surfaced in UI)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/admin/invites` | `{ name, role?, l1Enabled? }` → invite URL (7-day TTL) |
+| POST | `/api/admin/invites` | `{ name, role?, l1Enabled? }` → invite URL (7-day TTL). Kept for backwards compatibility; new flows use `/complete/*`. |
+
+### User social OAuth (self-service only — see `/api/me`)
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| DELETE | `/api/admin/users/:id/google-link` | admin = caller id only | Unlink Google (must keep ≥1 identity) |
+| DELETE | `/api/admin/users/:id/microsoft-link` | admin = caller id only | Unlink Microsoft (must keep ≥1 identity) |
+
+Admins cannot bind or unlink another user's Google/Microsoft identity. Self-service bind/unlink lives under `/api/me/oauth/*`.
 
 ### OAuth clients (L2 apps)
 
@@ -231,6 +241,8 @@ All routes require **admin** session unless noted.
 | PATCH | `/api/admin/clients/:clientId` | Update `name`, `accessMode`, `enabled` |
 | POST | `/api/admin/clients/:clientId/regenerate-secret` | New secret |
 | DELETE | `/api/admin/clients/:clientId` | Delete client |
+| GET | `/api/admin/clients/:clientId/users` | List users with L1 grant for this client |
+| PUT | `/api/admin/clients/:clientId/users` | Bulk set L1 grants (`{ userIds: string[] }`) |
 
 `accessMode`: `L2_ONLY` (default) or `L1_AND_L2` (requires L1 grant for OAuth).
 
@@ -241,14 +253,16 @@ All routes require **admin** session unless noted.
 | GET | `/api/admin/integration/webauth` | WEBAUTH runtime display config |
 | GET | `/api/admin/integration/google` | Google OAuth config (no secret) |
 | POST | `/api/admin/integration/google` | Save Google OAuth config |
+| POST | `/api/admin/integration/google/validate` | Validate Google credentials (returns `{ ok }` or error) |
 | GET | `/api/admin/integration/microsoft` | Microsoft OAuth config |
 | POST | `/api/admin/integration/microsoft` | Save Microsoft OAuth config |
+| POST | `/api/admin/integration/microsoft/validate` | Validate Microsoft credentials |
 
 ### Encrypted backup
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/admin/backup/export` | `{ password }` → encrypted bundle (**excludes root**) |
+| POST | `/api/admin/backup/export` | `{ password }` → encrypted bundle (**excludes root** and their Passkeys/OAuth) |
 | POST | `/api/admin/backup/preview` | `{ password, bundle }` → import preview |
 | POST | `/api/admin/backup/import` | Replace non-root data |
 
@@ -259,6 +273,7 @@ UI: **系统设置 → 加密备份**
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/admin/audit-logs` | Audit log list |
+| DELETE | `/api/admin/audit-logs` | Clear all audit logs (admin action; writes a `AUDIT_CLEAR` entry first) |
 | POST | `/api/admin/system/reset` | `{ confirmation: "RESET_ALL_I_UNDERSTAND" }` → `NEEDS_SETUP` |
 
 ---
@@ -268,11 +283,14 @@ UI: **系统设置 → 加密备份**
 | Path | When | Purpose |
 |------|------|---------|
 | `/setup` | `NEEDS_SETUP` | Bootstrap root admin Passkey |
-| `/login` | `ACTIVE` | Passkey / social login; `?return_to=` |
-| `/register` | `ACTIVE` + registration open | Self-register (pending approval) |
-| `/invite/:token` | Valid invite | Invite registration |
-| `/link-device` | Valid delegate token (`?t=`) | Passkey delegate registration |
-| `/admin/users` | admin | Users, L1, invites, registration toggle |
+| `/login` | `ACTIVE` | Passkey / Google / Microsoft login; `?return_to=` |
+| `/invite/:token` | Valid invite token | Invite registration (legacy) |
+| `/link-device` | Valid delegate token (`?t=`) | Passkey delegate registration (additional device) |
+| `/complete/:token` | Valid completion token | Account activation (Passkey / Google / Microsoft) |
+| `/complete/:token/passkey` | Valid completion token | Passkey activation shortcut (mobile deep link) |
+| `/me` | cookie | Redirect to `/me/profile` |
+| `/me/profile` | cookie | User sidebar — profile, name/email edit, own Passkey list, own OAuth bind/unlink |
+| `/admin/users` | admin | Users, activation links, Passkey management (Google/Microsoft read-only for other rows) |
 | `/admin/clients` | admin | OAuth client CRUD |
 | `/admin/integration` | admin | Google / Microsoft / WEBAUTH |
 | `/admin/config` | admin | Backup, factory reset |
@@ -288,9 +306,13 @@ All other paths → SPA (`dist/`) via Worker Assets.
 |----------|---------|---------|
 | `/api/verify` | **200** + identity headers | **302** → login |
 | `/api/login/verify` | **200** JSON `{ redirect }` | **403** pending/disabled; **400** bad Passkey |
+| `/api/complete/:token/passkey/verify` | **200** JSON `{ ok: true }` | **410** "已失效" if token used/expired/voided/exhausted |
+| `/api/oauth/{provider}/callback` (mode=login) | **302** → `/me` or `/admin` | **302** → `/login?oauth_error=...` (身份不符合) |
+| `/api/oauth/{provider}/callback` (mode=register) | **302** → `/me` | **302** → `/login?oauth_error=激活链接已失效` if token bad |
 | `/api/l2/authorize` | **302** → app with `code` | **302** `error=access_denied` or **400** JSON |
 | `/api/l2/token` | **200** token JSON | **401** bad secret; **400** invalid_grant |
-| Admin mutations | **200** / **201** `{ ok: true }` | **400** / **403** / **409** with `{ error }` |
+| `/api/me/oauth/{provider}-link` (DELETE) | **200** `{ ok: true }` | **400** "唯一验证身份，不可解绑" if it's the only identity |
+| Admin mutations | **200** / **201** `{ ok: true }` | **400** / **403** / **409` with `{ error }` |
 
 ---
 
