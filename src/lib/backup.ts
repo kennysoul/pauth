@@ -19,7 +19,6 @@ export const BACKUP_KIND = 'pauth-backup-v1';
 export type BackupPayload = {
   kind: typeof BACKUP_KIND;
   exportedAt: string;
-  registrationEnabled: boolean;
   users: (typeof users.$inferSelect)[];
   passkeys: (typeof passkeys.$inferSelect)[];
   clients: (typeof clients.$inferSelect)[];
@@ -39,7 +38,6 @@ export type BackupPreview = {
   invites: number;
   l1Grants: number;
   exportedAt: string;
-  registrationEnabled: boolean;
 };
 
 function previewFromPayload(payload: BackupPayload): BackupPreview {
@@ -52,7 +50,6 @@ function previewFromPayload(payload: BackupPayload): BackupPreview {
     invites: payload.invites.length,
     l1Grants: payload.userL1Access.length,
     exportedAt: payload.exportedAt,
-    registrationEnabled: payload.registrationEnabled,
   };
 }
 
@@ -89,7 +86,6 @@ export async function buildBackupPayload(env: Env): Promise<BackupPayload> {
   return {
     kind: BACKUP_KIND,
     exportedAt: nowIso(),
-    registrationEnabled: Boolean(config?.registrationEnabled),
     users: nonRootUsers,
     passkeys: nonRootPasskeys,
     clients: await db.select().from(clients).all(),
@@ -186,7 +182,6 @@ export async function importBackupPayload(env: Env, payload: BackupPayload): Pro
   await db
     .update(systemConfig)
     .set({
-      registrationEnabled: payload.registrationEnabled ? 1 : 0,
       updatedAt: ts,
     })
     .where(eq(systemConfig.id, 1));

@@ -1,13 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import { startAuthentication } from '@simplewebauthn/browser';
 import { api } from '../api';
 
-type Props = {
-  registrationEnabled: boolean;
-};
-
-export function LoginPage({ registrationEnabled }: Props) {
+export function LoginPage() {
   const [searchParams] = useSearchParams();
   const returnTo = searchParams.get('return_to');
   const [loading, setLoading] = useState(false);
@@ -79,7 +75,7 @@ export function LoginPage({ registrationEnabled }: Props) {
         <h1>登录</h1>
         <p className="sub">使用 Passkey 或第三方账号登录{returnTo ? '后返回原页面' : ''}。</p>
         {error && <p className="error">{error}</p>}
-        <button disabled={loading} onClick={handleLogin}>
+        <button disabled={loading} onClick={handleLogin} style={{ width: '100%' }}>
           {loading ? '验证中…' : '使用 Passkey 登录'}
         </button>
         {(googleEnabled || microsoftEnabled) && (
@@ -97,11 +93,6 @@ export function LoginPage({ registrationEnabled }: Props) {
               </button>
             )}
           </div>
-        )}
-        {registrationEnabled && (
-          <p style={{ marginTop: '1rem' }}>
-            还没有账号？ <Link to="/register">注册</Link>
-          </p>
         )}
       </div>
     </div>

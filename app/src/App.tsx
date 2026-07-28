@@ -3,8 +3,8 @@ import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { api, type SystemState } from './api';
 import { SetupPage } from './pages/SetupPage';
 import { LoginPage } from './pages/LoginPage';
-import { RegisterPage } from './pages/RegisterPage';
 import { LinkDevicePage } from './pages/LinkDevicePage';
+import { CompletePage } from './pages/CompletePage';
 import { AdminLayout } from './pages/admin/AdminLayout';
 import { AdminUsersPage } from './pages/admin/AdminUsersPage';
 import { AdminClientsPage } from './pages/admin/AdminClientsPage';
@@ -12,7 +12,8 @@ import { AdminConfigPage } from './pages/admin/AdminConfigPage';
 import { AdminIntegrationPage } from './pages/admin/AdminIntegrationPage';
 import { AdminLogsPage } from './pages/admin/AdminLogsPage';
 import { InvitePage } from './pages/InvitePage';
-import { MePage } from './pages/MePage';
+import { MeLayout } from './pages/me/MeLayout';
+import { MeProfilePage } from './pages/me/MeProfilePage';
 
 export function App() {
   const [state, setState] = useState<SystemState | null>(null);
@@ -52,20 +53,14 @@ export function App() {
   return (
     <Routes>
       <Route path="/setup" element={<SetupPage />} />
-      <Route path="/login" element={<LoginPage registrationEnabled={state.registrationEnabled} />} />
-      <Route
-        path="/register"
-        element={
-          state.registrationEnabled ? (
-            <RegisterPage />
-          ) : (
-            <Navigate to="/login" replace />
-          )
-        }
-      />
+      <Route path="/login" element={<LoginPage />} />
       <Route path="/invite/:token" element={<InvitePage />} />
       <Route path="/link-device" element={<LinkDevicePage />} />
-      <Route path="/me" element={<MePage />} />
+      <Route path="/complete/:token" element={<CompletePage />} />
+      <Route path="/me" element={<MeLayout />}>
+        <Route index element={<Navigate to="/me/profile" replace />} />
+        <Route path="profile" element={<MeProfilePage />} />
+      </Route>
       <Route path="/admin" element={<AdminLayout />}>
         <Route index element={<Navigate to="/admin/users" replace />} />
         <Route path="users" element={<AdminUsersPage />} />

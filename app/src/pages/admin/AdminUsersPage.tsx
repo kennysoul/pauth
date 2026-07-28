@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import QRCode from 'qrcode';
-import { api, type AdminUser, type Me, type PasskeyCredential, type PasskeyDelegateResult } from '../../api';
+import { api, type AdminUser, type CompleteLinkResult, type Me, type PasskeyCredential, type PasskeyDelegateResult } from '../../api';
 import { useToast } from '../../components/useToast';
 import { useConfirm } from '../../components/ConfirmProvider';
 import { AnchoredModal } from '../../components/AnchoredModal';
@@ -36,8 +36,7 @@ function formatDate(value: string) {
 }
 
 function statusLabel(u: AdminUser) {
-  if (u.status === 'pending' && !u.hasPendingInvite) return '待审批';
-  if (u.hasPendingInvite && u.status === 'pending') return '待注册';
+  if (u.status === 'pending') return '待激活';
   if (u.status === 'active') return '已激活';
   if (u.status === 'disabled') return '已禁用';
   return u.status;
@@ -53,7 +52,6 @@ export function AdminUsersPage() {
   const [me, setMe] = useState<Me | null>(null);
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [usersLoading, setUsersLoading] = useState(true);
-  const [registrationEnabled, setRegistrationEnabled] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { showToast, toastEl } = useToast();
   const confirm = useConfirm();
@@ -71,7 +69,6 @@ export function AdminUsersPage() {
   const [l1TogglingId, setL1TogglingId] = useState<string | null>(null);
 
   const [oauthModal, setOauthModal] = useState<OAuthModalState | null>(null);
-  const [allowEmail, setAllowEmail] = useState('');
   const [oauthBusy, setOAuthBusy] = useState(false);
 
   const [pkUser, setPkUser] = useState<AdminUser | null>(null);
@@ -83,6 +80,12 @@ export function AdminUsersPage() {
   const [pkAltDomain, setPkAltDomain] = useState('');
   const [pkAltLink, setPkAltLink] = useState('');
   const pkTimerRef = useRef<number | null>(null);
+
+  const [completeUser, setCompleteUser] = useState<AdminUser | null>(null);
+  const [completeUrl, setCompleteUrl] = useState('');
+  const [completeQr, setCompleteQr] = useState('');
+  const [completeExpireSec, setCompleteExpireSec] = useState(0);
+  const completeTimerRef = useRef<number | null>(null);
 
   const load = useCallback(async () => {
     setUsersLoading(true);
@@ -98,9 +101,6 @@ export function AdminUsersPage() {
 
   useEffect(() => {
     api<Me>('/api/me').then(setMe).catch(() => setMe(null));
-    api<{ registrationEnabled: boolean }>('/api/admin/config')
-      .then((c) => setRegistrationEnabled(c.registrationEnabled))
-      .catch(() => setRegistrationEnabled(false));
   }, []);
 
   useEffect(() => {
@@ -125,6 +125,7 @@ export function AdminUsersPage() {
   useEffect(() => {
     return () => {
       if (pkTimerRef.current) window.clearInterval(pkTimerRef.current);
+      if (completeTimerRef.current) window.clearInterval(completeTimerRef.current);
     };
   }, []);
 
@@ -133,15 +134,6 @@ export function AdminUsersPage() {
       window.clearInterval(pkTimerRef.current);
       pkTimerRef.current = null;
     }
-  }
-
-  async function toggleRegistration(enabled: boolean) {
-    await api('/api/admin/config', {
-      method: 'PATCH',
-      body: JSON.stringify({ registrationEnabled: enabled }),
-    });
-    setRegistrationEnabled(enabled);
-    showToast(enabled ? '已开放注册' : '已关闭注册');
   }
 
   async function createUser() {
@@ -166,12 +158,6 @@ export function AdminUsersPage() {
       setCreateEmail('');
       showToast('用户创建成功');
       await load();
-      const users = await api<AdminUser[]>('/api/admin/users');
-      const newUser = users.find((u) => u.id === res.userId);
-      if (newUser) {
-        openPkModal(newUser);
-        generatePkLinkForUser(newUser);
-      }
     } catch (e) {
       setCreateError(e instanceof Error ? e.message : '创建失败');
     } finally {
@@ -213,15 +199,6 @@ export function AdminUsersPage() {
     }
   }
 
-  async function approve(id: string) {
-    await api(`/api/admin/users/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ status: 'active' }),
-    });
-    showToast('用户已批准');
-    load();
-  }
-
   async function enableUser(id: string) {
     await api(`/api/admin/users/${id}`, {
       method: 'PATCH',
@@ -259,9 +236,10 @@ export function AdminUsersPage() {
     if (!ok) return;
     try {
       await api(`/api/admin/users/${u.id}`, { method: 'DELETE' });
-      load();
+      showToast('已删除');
+      await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed');
+      showToast(e instanceof Error ? e.message : '删除失败');
     }
   }
 
@@ -307,30 +285,7 @@ export function AdminUsersPage() {
 
   function openOAuthModal(user: AdminUser, provider: OAuthProvider) {
     setOauthModal({ user, provider });
-    setAllowEmail(provider === 'google' ? user.googleAllowedEmail : user.microsoftAllowedEmail);
     setError(null);
-  }
-
-  async function saveAllowedEmail() {
-    if (!oauthModal) return;
-    setOAuthBusy(true);
-    try {
-      const path =
-        oauthModal.provider === 'google'
-          ? `/api/admin/users/${oauthModal.user.id}/google-allow-email`
-          : `/api/admin/users/${oauthModal.user.id}/microsoft-allow-email`;
-      await api(path, {
-        method: 'POST',
-        body: JSON.stringify({ email: allowEmail.trim() }),
-      });
-      showToast('首次绑定限定邮箱已保存');
-      setOauthModal(null);
-      load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed');
-    } finally {
-      setOAuthBusy(false);
-    }
   }
 
   async function unlinkOAuth() {
@@ -441,6 +396,56 @@ export function AdminUsersPage() {
     await generatePkLinkForUser(pkUser);
   }
 
+  function closeCompleteModal() {
+    if (completeTimerRef.current) {
+      window.clearInterval(completeTimerRef.current);
+      completeTimerRef.current = null;
+    }
+    setCompleteUser(null);
+    setCompleteUrl('');
+    setCompleteQr('');
+    setCompleteExpireSec(0);
+  }
+
+  async function generateCompleteLinkForUser(user: AdminUser) {
+    setCompleteUser(user);
+    setCompleteUrl('');
+    setCompleteQr('');
+    setCompleteExpireSec(0);
+    try {
+      const res = await api<CompleteLinkResult>(`/api/admin/users/${user.id}/complete-link`, {
+        method: 'POST',
+      });
+      setCompleteUrl(res.completeUrl);
+      setCompleteQr(await QRCode.toDataURL(res.completeUrl, { margin: 1, width: 180 }));
+      startCompleteCountdown(res.ttlSeconds);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '生成失败');
+      setCompleteUser(null);
+    }
+  }
+
+  function startCompleteCountdown(seconds: number) {
+    if (completeTimerRef.current) {
+      window.clearInterval(completeTimerRef.current);
+    }
+    let remaining = seconds;
+    const tick = () => {
+      if (remaining <= 0) {
+        if (completeTimerRef.current) {
+          window.clearInterval(completeTimerRef.current);
+          completeTimerRef.current = null;
+        }
+        setCompleteExpireSec(0);
+        return;
+      }
+      setCompleteExpireSec(remaining);
+      remaining -= 1;
+    };
+    tick();
+    completeTimerRef.current = window.setInterval(tick, 1000);
+  }
+
   function updateAltLink(domain: string, baseLink: string) {
     const trimmed = domain.trim().replace(/\/+$/, '');
     if (!trimmed || !baseLink) {
@@ -493,6 +498,7 @@ export function AdminUsersPage() {
     oauthModal &&
     (oauthModal.provider === 'google' ? oauthModal.user.googleEnabled : oauthModal.user.microsoftEnabled);
   const providerLabel = oauthModal?.provider === 'google' ? 'Google' : 'Microsoft';
+  const modalIsSelf = Boolean(oauthModal && me && oauthModal.user.id === me.id);
 
   function renderActions(u: AdminUser) {
     const passkeyOn = u.hasPasskey || u.passkeyCount > 0;
@@ -501,9 +507,9 @@ export function AdminUsersPage() {
 
     return (
       <div className="row-actions">
-        {u.status === 'pending' && !u.hasPendingInvite && (
-          <button type="button" className="credential-btn" onClick={() => approve(u.id)}>
-            批准
+        {(!u.isRoot || (me && u.id === me.id)) && (
+          <button type="button" className="credential-btn" onClick={() => generateCompleteLinkForUser(u)}>
+            {u.status === 'pending' ? '生成激活链接' : '重置身份链接'}
           </button>
         )}
         {(!u.isRoot || (me && u.id === me.id)) && (
@@ -558,8 +564,8 @@ export function AdminUsersPage() {
     <>
       <div className="main-head">
         <div className="head-text">
-          <h1 className="head-title">用户设置</h1>
-          <p className="head-sub">管理开放注册与用户账号。</p>
+          <h1 className="head-title">用户管理</h1>
+          <p className="head-sub">管理用户账号。</p>
         </div>
         <div className="page-header-actions">
           <button type="button" className="btn" disabled={usersLoading} onClick={() => load()}>
@@ -570,24 +576,6 @@ export function AdminUsersPage() {
 
       <div className="admin-main-body">
         {error && <p className="error">{error}</p>}
-
-        <article className="card span-12 users-settings-card">
-            <h3>开放注册</h3>
-            <div className="users-toggle-row">
-              <div>
-                <div className="status-title">开放注册</div>
-                <div className="status-sub">开启后新用户可自行注册账号（注册后需管理员审核）</div>
-              </div>
-              <label className="toggle-pill">
-                <input
-                  type="checkbox"
-                  checked={registrationEnabled}
-                  onChange={(e) => toggleRegistration(e.target.checked)}
-                />
-                <span className="toggle-pill-ui" />
-              </label>
-            </div>
-          </article>
 
         <article className="card span-12">
           <div className="settings-inline-head">
@@ -728,17 +716,21 @@ export function AdminUsersPage() {
                 {providerLabel} 关联管理 · {oauthModal.user.name}
               </div>
               <div className="users-modal-sub">
-                {modalLinked ? `已绑定：${modalEmail || '—'}` : '尚未绑定，点击卡片可发起绑定'}
+                {modalLinked
+                  ? `已绑定：${modalEmail || '—'}`
+                  : modalIsSelf
+                    ? '尚未绑定，点击卡片可发起绑定'
+                    : '尚未绑定'}
               </div>
             </div>
             <div className="users-modal-body">
               <div
-                className="users-google-card"
-                role="button"
-                tabIndex={0}
-                onClick={() => modalEnabled && startOAuthBind(oauthModal.user, oauthModal.provider)}
+                className={`users-google-card${modalIsSelf ? '' : ' readonly'}`}
+                role={modalIsSelf ? 'button' : undefined}
+                tabIndex={modalIsSelf ? 0 : undefined}
+                onClick={() => modalIsSelf && modalEnabled && startOAuthBind(oauthModal.user, oauthModal.provider)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && modalEnabled) startOAuthBind(oauthModal.user, oauthModal.provider);
+                  if (modalIsSelf && e.key === 'Enter' && modalEnabled) startOAuthBind(oauthModal.user, oauthModal.provider);
                 }}
               >
                 <img
@@ -753,40 +745,24 @@ export function AdminUsersPage() {
                   <div className="users-google-sub">
                     {modalLinked
                       ? modalEmail || '—'
-                      : modalEnabled
-                        ? '点击卡片即可直接添加关联'
-                        : '请先在「集成与安全」中配置 OAuth'}
+                      : modalIsSelf
+                        ? modalEnabled
+                          ? '点击卡片即可直接添加关联'
+                          : '请先在「集成与安全」中配置 OAuth'
+                        : '仅本人可管理关联'}
                   </div>
-                </div>
-              </div>
-
-              <div className="users-google-limit-box">
-                <div className="users-google-limit-title">首次绑定限定邮箱</div>
-                <p className="sub" style={{ margin: '4px 0 0', fontSize: '11px' }}>
-                  仅在该用户首次 {providerLabel} 绑定时生效。留空表示不限制。
-                </p>
-                <div className="users-google-limit-row">
-                  <input
-                    type="email"
-                    value={allowEmail}
-                    onChange={(e) => setAllowEmail(e.target.value)}
-                    placeholder="例如: user@gmail.com"
-                  />
-                  <button type="button" className="credential-btn" disabled={oauthBusy} onClick={saveAllowedEmail}>
-                    保存
-                  </button>
                 </div>
               </div>
             </div>
             <div className="users-modal-footer">
-              {modalLinked && modalCanUnlink && (
+              {modalIsSelf && modalLinked && modalCanUnlink && (
                 <button type="button" className="btn danger" disabled={oauthBusy} onClick={unlinkOAuth} style={{ marginRight: 'auto' }}>
                   解绑
                 </button>
               )}
-              {modalLinked && !modalCanUnlink && (
+              {modalIsSelf && modalLinked && !modalCanUnlink && (
                 <span className="sub" style={{ marginRight: 'auto', fontSize: '11px' }}>
-                  无 Passkey 时不可解绑
+                  唯一验证身份，不可解绑
                 </span>
               )}
               <button type="button" className="btn" onClick={() => setOauthModal(null)}>
@@ -874,6 +850,47 @@ export function AdminUsersPage() {
                 {pkQr ? '重新生成' : '添加 Passkey'}
               </button>
               <button type="button" className="btn" onClick={closePkModal}>
+                关闭
+              </button>
+            </div>
+        </AnchoredModal>
+      )}
+
+      {completeUser && (
+        <AnchoredModal onClose={closeCompleteModal} className="users-modal users-pk-modal">
+            <div className="users-modal-header">
+              <div className="users-modal-title">激活链接 · {completeUser.name}</div>
+              <div className="users-modal-sub">将链接发送给用户，用户可使用 Passkey / Google / Microsoft 任一方式完成激活</div>
+            </div>
+            <div className="users-modal-body">
+              {completeQr ? (
+                <>
+                  <div className="users-qr-label">用手机扫码激活（有效期 15 分钟）</div>
+                  <img src={completeQr} alt="激活二维码" width={180} height={180} />
+                  {completeExpireSec > 0 ? (
+                    <div className="users-qr-expire">
+                      链接有效期：{Math.floor(completeExpireSec / 60)}:
+                      {String(completeExpireSec % 60).padStart(2, '0')}
+                    </div>
+                  ) : (
+                    <div className="users-qr-expire expired">链接已过期，请重新生成</div>
+                  )}
+                  <div className="users-qr-label" style={{ marginTop: 8 }}>
+                    点击复制激活链接
+                  </div>
+                  <span className="users-qr-link" role="button" tabIndex={0} onClick={() => copyText(completeUrl)}>
+                    {completeUrl}
+                  </span>
+                </>
+              ) : (
+                <p className="sub">生成中…</p>
+              )}
+            </div>
+            <div className="users-modal-footer">
+              <button type="button" className="btn" onClick={() => generateCompleteLinkForUser(completeUser)} style={{ marginRight: 'auto' }}>
+                重新生成
+              </button>
+              <button type="button" className="btn" onClick={closeCompleteModal}>
                 关闭
               </button>
             </div>

@@ -4,14 +4,13 @@ import { eq } from 'drizzle-orm';
 import type { AuthContext, Env, User } from '../types';
 import { writeAuditLog } from '../lib/audit';
 import { appendQuery } from '../lib/crypto';
-import { getDb, newId, nowIso } from '../lib/db';
+import { getDb } from '../lib/db';
 import { normalizeOAuthEmail } from '../lib/oauth-email';
 import {
   bindOAuthIdentity,
-  clearUserAllowedEmail,
+  deleteOAuthIdentityForUser,
   getOAuthIdentityBySubject,
   getOAuthIdentityForUser,
-  getUserByAllowedEmail,
   type OAuthProfile,
   type OAuthProvider,
 } from '../lib/oauth-identities';
@@ -23,8 +22,13 @@ import {
   microsoftRedirectUri,
 } from '../lib/oauth-config';
 import { issueOAuthState, safeNextPath, takeOAuthState } from '../lib/oauth-state';
-import { systemConfig, users } from '../lib/schema';
+import { users } from '../lib/schema';
 import { appendCookies, createSession, resolveNormalSession } from '../lib/session';
+import {
+  validateCompleteLink,
+  markCompleteLinkUsed,
+  activateUser,
+} from '../lib/complete';
 
 export const oauthRoutes = new Hono<{ Bindings: Env; Variables: AuthContext }>();
 
@@ -50,10 +54,10 @@ async function finishLogin(c: Context, userId: string, nextPath: string) {
     return redirectWithError(c, '/login', '用户不存在');
   }
   if (user.status === 'pending') {
-    return redirectWithError(c, '/login', '账号待审批，请等待管理员确认');
+    return redirectWithError(c, '/login', '身份不符合');
   }
   if (user.status === 'disabled') {
-    return redirectWithError(c, '/login', '账号已被禁用');
+    return redirectWithError(c, '/login', '身份不符合');
   }
   const { setCookie } = await createSession(c.env, userId, 'normal');
   appendCookies(c, setCookie);
@@ -70,7 +74,7 @@ async function handleBindMode(
   profile: OAuthProfile,
   oauthState: { bindUserId?: string; bindOperatorUserId?: string; next: string },
 ) {
-  const nextPath = safeNextPath(oauthState.next, '/admin/users');
+  const nextPath = safeNextPath(oauthState.next, '/me');
   const bindUserId = String(oauthState.bindUserId || '').trim();
   if (!bindUserId) {
     return redirectWithError(c, nextPath, '绑定状态无效，请重试');
@@ -81,46 +85,24 @@ async function handleBindMode(
     return redirectWithError(c, nextPath, '登录已失效，请重新发起关联');
   }
   const operator = resolved.user;
-  const operatorId = oauthState.bindOperatorUserId || operator.id;
-  if (operator.id !== operatorId) {
-    return redirectWithError(c, nextPath, '登录用户已变化，请重新发起关联');
-  }
-  if (bindUserId !== operator.id && operator.role !== 'admin') {
-    return redirectWithError(c, nextPath, '仅管理员可为其他用户关联第三方账号');
+  if (bindUserId !== operator.id) {
+    return redirectWithError(c, nextPath, '身份不符合');
   }
 
   const db = getDb(c.env);
   const targetUser = await db.select().from(users).where(eq(users.id, bindUserId)).get();
   if (!targetUser) {
-    return redirectWithError(c, nextPath, '目标用户不存在');
-  }
-
-  const existing = await getOAuthIdentityForUser(c.env, bindUserId, provider);
-  const isFirstBind = !existing;
-  const allowedColumn =
-    provider === 'google' ? targetUser.allowedGoogleEmail : targetUser.allowedMicrosoftEmail;
-  const preauthorizedEmail = normalizeOAuthEmail(allowedColumn);
-
-  if (isFirstBind && preauthorizedEmail) {
-    if (provider === 'google' && !profile.emailVerified) {
-      return redirectWithError(c, nextPath, '该用户限定了邮箱，但当前 Google 邮箱未验证');
-    }
-    if (provider === 'microsoft' && !profile.email) {
-      return redirectWithError(c, nextPath, '该用户限定了邮箱，但当前 Microsoft 账号未返回邮箱');
-    }
-    if (profile.email !== preauthorizedEmail) {
-      return redirectWithError(c, nextPath, '当前邮箱未获授权，请使用管理员指定邮箱');
-    }
+    return redirectWithError(c, nextPath, '身份不符合');
   }
 
   try {
     await bindOAuthIdentity(c.env, bindUserId, provider, profile);
-    if (isFirstBind && preauthorizedEmail) {
-      await clearUserAllowedEmail(c.env, bindUserId, provider);
-    }
   } catch (e) {
-    const message = e instanceof Error ? e.message : '绑定失败';
-    return redirectWithError(c, nextPath, message);
+    await writeAuditLog(c.env, operator.id, 'OAUTH_BIND_FAIL', bindUserId, {
+      provider,
+      reason: e instanceof Error ? e.message : String(e),
+    });
+    return redirectWithError(c, nextPath, '身份不符合');
   }
 
   await writeAuditLog(c.env, operator.id, 'OAUTH_BIND', bindUserId, { provider, email: profile.email });
@@ -143,69 +125,41 @@ async function handleLoginMode(
     return finishLogin(c, linked.userId, nextPath);
   }
 
-  if (profile.email) {
-    const preauthorized = await getUserByAllowedEmail(c.env, provider, profile.email);
-    if (preauthorized) {
-      if (provider === 'google' && !profile.emailVerified) {
-        return redirectWithError(c, '/login', '该账号要求已验证的 Google 邮箱');
-      }
-      if (provider === 'microsoft' && !profile.email) {
-        return redirectWithError(c, '/login', 'Microsoft 账号未返回邮箱');
-      }
-      if (preauthorized.status !== 'active') {
-        return redirectWithError(c, '/login', '该账号尚未激活，请联系管理员');
-      }
-      const hadLinked = await getOAuthIdentityForUser(c.env, preauthorized.id, provider);
-      const preEmail = normalizeOAuthEmail(
-        provider === 'google'
-          ? preauthorized.allowedGoogleEmail
-          : preauthorized.allowedMicrosoftEmail,
-      );
-      try {
-        await bindOAuthIdentity(c.env, preauthorized.id, provider, profile);
-        if (!hadLinked && preEmail) {
-          await clearUserAllowedEmail(c.env, preauthorized.id, provider);
-        }
-      } catch (e) {
-        const message = e instanceof Error ? e.message : '绑定失败';
-        return redirectWithError(c, '/login', message);
-      }
-      return finishLogin(c, preauthorized.id, nextPath);
-    }
-  }
+  return redirectWithError(c, '/login', '身份不符合');
+}
 
-  const db = getDb(c.env);
-  const config = await db.select().from(systemConfig).where(eq(systemConfig.id, 1)).get();
-  if (!config?.registrationEnabled) {
-    return redirectWithError(c, '/login', '注册已关闭，请联系管理员先关联第三方账号');
+async function handleRegisterMode(
+  c: Context,
+  provider: OAuthProvider,
+  profile: OAuthProfile,
+  completeToken: string,
+) {
+  const result = await validateCompleteLink(c.env, completeToken);
+  if ('error' in result) {
+    return redirectWithError(c, '/login', '激活链接已失效');
   }
+  const userId = result.user.id;
 
-  if (!profile.email) {
-    return redirectWithError(c, '/login', '第三方账号未返回邮箱，无法注册');
-  }
-
-  const ts = nowIso();
-  const userId = newId();
-  const displayName = profile.displayName || profile.email.split('@')[0] || 'User';
   try {
-    await db.insert(users).values({
-      id: userId,
-      email: profile.email,
-      name: displayName,
-      role: 'user',
-      status: 'pending',
-      allowedGoogleEmail: '',
-      allowedMicrosoftEmail: '',
-      createdAt: ts,
-      updatedAt: ts,
-    });
     await bindOAuthIdentity(c.env, userId, provider, profile);
-  } catch {
-    await db.delete(users).where(eq(users.id, userId));
-    return redirectWithError(c, '/login', '自动创建账号失败，请稍后重试');
+  } catch (e) {
+    await writeAuditLog(c.env, userId, 'COMPLETE_LINK_BIND_FAIL', userId, {
+      provider,
+      reason: e instanceof Error ? e.message : String(e),
+    });
+    return redirectWithError(c, '/login', '身份不符合');
   }
 
-  return redirectWithError(c, '/login', '账号已创建，请等待管理员审批');
+  const wasPending = result.user.status === 'pending';
+  if (wasPending) {
+    await activateUser(c.env, userId);
+  }
+  await markCompleteLinkUsed(c.env, completeToken);
+  await writeAuditLog(c.env, userId, 'COMPLETE_LINK_USED', userId, {
+    provider,
+    wasPending,
+  });
+  return finishLogin(c, userId, '/me');
 }
 
 async function authorizeBindStart(
@@ -228,15 +182,10 @@ async function authorizeBindStart(
   const operator = resolved.user;
   let targetBindUserId = operator.id;
   if (bindUserId) {
+    if (bindUserId !== operator.id) {
+      return redirectWithError(c, next, '身份不符合');
+    }
     targetBindUserId = bindUserId;
-    if (targetBindUserId !== operator.id && operator.role !== 'admin') {
-      return redirectWithError(c, next, `仅管理员可为其他用户关联 ${providerLabel}`);
-    }
-    const db = getDb(c.env);
-    const target = await db.select().from(users).where(eq(users.id, targetBindUserId)).get();
-    if (!target) {
-      return redirectWithError(c, next, '目标用户不存在');
-    }
   }
   return { operator, targetBindUserId };
 }
@@ -257,10 +206,13 @@ oauthRoutes.get('/google/start', async (c) => {
     return c.json({ error: 'Google OAuth 未配置' }, 503);
   }
 
-  const mode = c.req.query('mode') === 'bind' ? 'bind' : 'login';
+  const rawMode = c.req.query('mode');
+  const mode: 'login' | 'bind' | 'register' =
+    rawMode === 'bind' ? 'bind' : rawMode === 'register' ? 'register' : 'login';
   const defaultNext = mode === 'bind' ? '/admin/users' : '/admin';
   const next = safeNextPath(c.req.query('next'), defaultNext);
   const bindUserId = c.req.query('bind_user_id')?.trim() || undefined;
+  const completeToken = c.req.query('complete_token')?.trim() || undefined;
 
   const statePayload: Parameters<typeof issueOAuthState>[1] = {
     provider: 'google',
@@ -273,6 +225,17 @@ oauthRoutes.get('/google/start', async (c) => {
     if (check instanceof Response) return check;
     statePayload.bindUserId = check.targetBindUserId;
     statePayload.bindOperatorUserId = check.operator.id;
+  }
+
+  if (mode === 'register') {
+    if (!completeToken) {
+      return c.json({ error: '缺少 complete_token' }, 400);
+    }
+    const check = await validateCompleteLink(c.env, completeToken);
+    if ('error' in check) {
+      return c.json({ error: '激活链接已失效' }, 410);
+    }
+    statePayload.registerCompleteToken = completeToken;
   }
 
   const state = await issueOAuthState(c.env, statePayload);
@@ -295,10 +258,13 @@ oauthRoutes.get('/microsoft/start', async (c) => {
     return c.json({ error: 'Microsoft OAuth 未配置' }, 503);
   }
 
-  const mode = c.req.query('mode') === 'bind' ? 'bind' : 'login';
+  const rawMode = c.req.query('mode');
+  const mode: 'login' | 'bind' | 'register' =
+    rawMode === 'bind' ? 'bind' : rawMode === 'register' ? 'register' : 'login';
   const defaultNext = mode === 'bind' ? '/admin/users' : '/admin';
   const next = safeNextPath(c.req.query('next'), defaultNext);
   const bindUserId = c.req.query('bind_user_id')?.trim() || undefined;
+  const completeToken = c.req.query('complete_token')?.trim() || undefined;
 
   const statePayload: Parameters<typeof issueOAuthState>[1] = {
     provider: 'microsoft',
@@ -311,6 +277,17 @@ oauthRoutes.get('/microsoft/start', async (c) => {
     if (check instanceof Response) return check;
     statePayload.bindUserId = check.targetBindUserId;
     statePayload.bindOperatorUserId = check.operator.id;
+  }
+
+  if (mode === 'register') {
+    if (!completeToken) {
+      return c.json({ error: '缺少 complete_token' }, 400);
+    }
+    const check = await validateCompleteLink(c.env, completeToken);
+    if ('error' in check) {
+      return c.json({ error: '激活链接已失效' }, 410);
+    }
+    statePayload.registerCompleteToken = completeToken;
   }
 
   const state = await issueOAuthState(c.env, statePayload);
@@ -402,6 +379,12 @@ oauthRoutes.get('/google/callback', async (c) => {
 
   if (mode === 'bind') {
     return handleBindMode(c, 'google', profile, oauthState);
+  }
+  if (mode === 'register') {
+    if (!oauthState.registerCompleteToken) {
+      return redirectWithError(c, '/login', '登录状态已过期，请重试');
+    }
+    return handleRegisterMode(c, 'google', profile, oauthState.registerCompleteToken);
   }
   return handleLoginMode(c, 'google', profile, nextPath);
 });
@@ -495,12 +478,18 @@ oauthRoutes.get('/microsoft/callback', async (c) => {
   if (mode === 'bind') {
     return handleBindMode(c, 'microsoft', profile, oauthState);
   }
+  if (mode === 'register') {
+    if (!oauthState.registerCompleteToken) {
+      return redirectWithError(c, '/login', '登录状态已过期，请重试');
+    }
+    return handleRegisterMode(c, 'microsoft', profile, oauthState.registerCompleteToken);
+  }
   return handleLoginMode(c, 'microsoft', profile, nextPath);
 });
 
 export async function buildOAuthUserFields(
   env: Env,
-  user: User & { allowedGoogleEmail?: string; allowedMicrosoftEmail?: string },
+  user: User,
   passkeyCount: number,
   googleEnabled: boolean,
   microsoftEnabled: boolean,
@@ -518,7 +507,7 @@ export async function buildOAuthUserFields(
 }
 
 export function buildOAuthUserFieldsSync(
-  user: User & { allowedGoogleEmail?: string; allowedMicrosoftEmail?: string },
+  user: User,
   passkeyCount: number,
   googleEnabled: boolean,
   microsoftEnabled: boolean,
@@ -531,12 +520,10 @@ export function buildOAuthUserFieldsSync(
     googleLinked: Boolean(googleLinked),
     googleEmail: googleLinked?.email || '',
     googleCanUnlink: Boolean(googleLinked && hasPasskey),
-    googleAllowedEmail: normalizeOAuthEmail(user.allowedGoogleEmail || ''),
     microsoftEnabled,
     microsoftLinked: Boolean(msLinked),
     microsoftEmail: msLinked?.email || '',
     microsoftCanUnlink: Boolean(msLinked && hasPasskey),
-    microsoftAllowedEmail: normalizeOAuthEmail(user.allowedMicrosoftEmail || ''),
     hasPasskey,
   };
 }

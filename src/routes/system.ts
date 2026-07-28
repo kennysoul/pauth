@@ -13,7 +13,6 @@ systemRoutes.get('/state', async (c) => {
   const config = await db.select().from(systemConfig).where(eq(systemConfig.id, 1)).get();
   return c.json({
     state: config?.state ?? 'NEEDS_SETUP',
-    registrationEnabled: Boolean(config?.registrationEnabled),
     origin: c.env.ORIGIN,
   });
 });

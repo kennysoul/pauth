@@ -2,10 +2,11 @@ import type { Env } from '../types';
 
 export type OAuthStatePayload = {
   provider: 'google' | 'microsoft';
-  mode: 'login' | 'bind';
+  mode: 'login' | 'bind' | 'register';
   next: string;
   bindUserId?: string;
   bindOperatorUserId?: string;
+  registerCompleteToken?: string;
 };
 
 const TTL = 600;

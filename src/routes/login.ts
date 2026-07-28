@@ -40,10 +40,10 @@ loginRoutes.post('/verify', async (c) => {
       return c.json({ error: 'User not found' }, 404);
     }
     if (user.status === 'pending') {
-      return c.json({ error: '账号待审批，请等待管理员确认' }, 403);
+      return c.json({ error: '身份不符合' }, 403);
     }
     if (user.status === 'disabled') {
-      return c.json({ error: '账号已被禁用' }, 403);
+      return c.json({ error: '身份不符合' }, 403);
     }
 
     const ts = nowIso();

@@ -3,7 +3,6 @@ import { sqliteTable, text, integer, primaryKey } from 'drizzle-orm/sqlite-core'
 export const systemConfig = sqliteTable('system_config', {
   id: integer('id').primaryKey(),
   state: text('state').notNull(),
-  registrationEnabled: integer('registration_enabled').notNull(),
   updatedAt: text('updated_at').notNull(),
 });
 
@@ -13,8 +12,6 @@ export const users = sqliteTable('users', {
   name: text('name').notNull(),
   role: text('role').notNull(),
   status: text('status').notNull(),
-  allowedGoogleEmail: text('allowed_google_email').notNull().default(''),
-  allowedMicrosoftEmail: text('allowed_microsoft_email').notNull().default(''),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 });
@@ -136,5 +133,17 @@ export const passkeyDelegateTokens = sqliteTable('passkey_delegate_tokens', {
   token: text('token').primaryKey(),
   userId: text('user_id').notNull(),
   expiresAt: text('expires_at').notNull(),
+  createdAt: text('created_at').notNull(),
+});
+
+export const completeLinks = sqliteTable('complete_links', {
+  id: text('id').primaryKey(),
+  token: text('token').notNull().unique(),
+  userId: text('user_id').notNull(),
+  usedAt: text('used_at'),
+  voidedAt: text('voided_at'),
+  expiresAt: text('expires_at').notNull(),
+  openCount: integer('open_count').notNull().default(0),
+  maxOpens: integer('max_opens').notNull().default(3),
   createdAt: text('created_at').notNull(),
 });

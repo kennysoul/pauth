@@ -3,11 +3,9 @@ import { eq } from 'drizzle-orm';
 import type { AuthContext, Env } from '../types';
 import { writeAuditLog } from '../lib/audit';
 import { getDb } from '../lib/db';
-import { isValidEmailFormat, normalizeOAuthEmail } from '../lib/oauth-email';
 import {
   deleteOAuthIdentityForUser,
   getOAuthIdentityForUser,
-  setUserAllowedEmail,
 } from '../lib/oauth-identities';
 import {
   getGoogleOAuthConfig,
@@ -243,44 +241,12 @@ export function registerAdminOAuthRoutes(adminRoutes: Hono<{ Bindings: Env; Vari
     });
   });
 
-  adminRoutes.post('/users/:id/google-allow-email', async (c) => {
-    const targetId = c.req.param('id');
-    const body = await c.req.json<{ email?: string }>();
-    const email = normalizeOAuthEmail(body.email || '');
-    if (email && !isValidEmailFormat(email)) {
-      return c.json({ error: '邮箱格式无效' }, 400);
-    }
-    const db = getDb(c.env);
-    const target = await db.select().from(users).where(eq(users.id, targetId)).get();
-    if (!target) return c.json({ error: 'User not found' }, 404);
-    try {
-      await setUserAllowedEmail(c.env, targetId, 'google', email);
-    } catch (e) {
-      return c.json({ error: e instanceof Error ? e.message : 'Failed' }, 400);
-    }
-    return c.json({ ok: true, allowedGoogleEmail: email });
-  });
-
-  adminRoutes.post('/users/:id/microsoft-allow-email', async (c) => {
-    const targetId = c.req.param('id');
-    const body = await c.req.json<{ email?: string }>();
-    const email = normalizeOAuthEmail(body.email || '');
-    if (email && !isValidEmailFormat(email)) {
-      return c.json({ error: '邮箱格式无效' }, 400);
-    }
-    const db = getDb(c.env);
-    const target = await db.select().from(users).where(eq(users.id, targetId)).get();
-    if (!target) return c.json({ error: 'User not found' }, 404);
-    try {
-      await setUserAllowedEmail(c.env, targetId, 'microsoft', email);
-    } catch (e) {
-      return c.json({ error: e instanceof Error ? e.message : 'Failed' }, 400);
-    }
-    return c.json({ ok: true, allowedMicrosoftEmail: email });
-  });
-
   adminRoutes.delete('/users/:id/google-link', async (c) => {
     const targetId = c.req.param('id');
+    const actor = c.get('user');
+    if (targetId !== actor.id) {
+      return c.json({ error: '仅可管理自己的关联账号' }, 403);
+    }
     const db = getDb(c.env);
     const target = await db.select().from(users).where(eq(users.id, targetId)).get();
     if (!target) return c.json({ error: 'User not found' }, 404);
@@ -289,17 +255,22 @@ export function registerAdminOAuthRoutes(adminRoutes: Hono<{ Bindings: Env; Vari
     if (!linked) return c.json({ ok: true });
 
     const pks = await db.select().from(passkeys).where(eq(passkeys.userId, targetId)).all();
-    if (pks.length === 0) {
-      return c.json({ error: '该账号仅绑定了 Google 登录，请先添加 Passkey 再解绑' }, 400);
+    const msLinked = await getOAuthIdentityForUser(c.env, targetId, 'microsoft');
+    if (pks.length === 0 && !msLinked) {
+      return c.json({ error: '至少保留一种登录身份，请先添加 Passkey 或关联 Microsoft' }, 400);
     }
 
     await deleteOAuthIdentityForUser(c.env, targetId, 'google');
-    await writeAuditLog(c.env, c.get('user').id, 'OAUTH_UNLINK', targetId, { provider: 'google' });
+    await writeAuditLog(c.env, actor.id, 'OAUTH_UNLINK', targetId, { provider: 'google' });
     return c.json({ ok: true });
   });
 
   adminRoutes.delete('/users/:id/microsoft-link', async (c) => {
     const targetId = c.req.param('id');
+    const actor = c.get('user');
+    if (targetId !== actor.id) {
+      return c.json({ error: '仅可管理自己的关联账号' }, 403);
+    }
     const db = getDb(c.env);
     const target = await db.select().from(users).where(eq(users.id, targetId)).get();
     if (!target) return c.json({ error: 'User not found' }, 404);
@@ -308,12 +279,13 @@ export function registerAdminOAuthRoutes(adminRoutes: Hono<{ Bindings: Env; Vari
     if (!linked) return c.json({ ok: true });
 
     const pks = await db.select().from(passkeys).where(eq(passkeys.userId, targetId)).all();
-    if (pks.length === 0) {
-      return c.json({ error: '该账号仅绑定了 Microsoft 登录，请先添加 Passkey 再解绑' }, 400);
+    const googleLinked = await getOAuthIdentityForUser(c.env, targetId, 'google');
+    if (pks.length === 0 && !googleLinked) {
+      return c.json({ error: '至少保留一种登录身份，请先添加 Passkey 或关联 Google' }, 400);
     }
 
     await deleteOAuthIdentityForUser(c.env, targetId, 'microsoft');
-    await writeAuditLog(c.env, c.get('user').id, 'OAUTH_UNLINK', targetId, { provider: 'microsoft' });
+    await writeAuditLog(c.env, actor.id, 'OAUTH_UNLINK', targetId, { provider: 'microsoft' });
     return c.json({ ok: true });
   });
 }

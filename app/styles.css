@@ -105,13 +105,13 @@ button,
   align-items: center;
   justify-content: center;
   gap: 0.35rem;
-  border-radius: 10px;
-  border: 1px solid var(--line);
-  background: transparent;
-  color: #dbe3f8;
-  padding: 9px 12px;
-  font-size: 12px;
-  font-weight: 600;
+  border-radius: 8px;
+  border: 1px solid #3e4c69;
+  background: #121f36;
+  color: #bdd0ef;
+  padding: 5px 9px;
+  font-size: 11px;
+  font-weight: 700;
   cursor: pointer;
   text-decoration: none;
   font-family: inherit;
@@ -119,8 +119,9 @@ button,
 
 button:hover,
 .btn:hover {
-  border-color: #4b5672;
-  background: rgba(255, 255, 255, 0.03);
+  border-color: #5d7098;
+  background: #1a2a48;
+  filter: none;
 }
 
 button:disabled,
@@ -130,24 +131,22 @@ button:disabled,
 }
 
 button.primary,
-.btn.primary,
-button:not(.secondary):not(.credential-btn):not(.icon-btn):not(.link-btn):not(.link-copy):not(.nav-item):not(.danger):not(.warn):not(.l1-chip):not(.secret-visibility-btn):not(.validate-chip) {
-  border-color: rgba(250, 45, 85, 0.55);
-  color: #ffe8ed;
-  background: linear-gradient(180deg, #e43d5f, #c7244a);
+.btn.primary {
+  border-color: rgba(250, 45, 85, 0.56);
+  color: #ffe6eb;
+  background: rgba(250, 45, 85, 0.2);
 }
 
 button.primary:hover,
-.btn.primary:hover,
-button:not(.secondary):not(.credential-btn):not(.icon-btn):not(.link-btn):not(.link-copy):not(.nav-item):not(.danger):not(.warn):not(.secret-visibility-btn):not(.validate-chip):hover {
-  filter: brightness(1.04);
+.btn.primary:hover {
+  filter: brightness(1.08);
 }
 
 button.secondary,
 .btn.secondary {
-  background: transparent;
-  border-color: var(--line);
-  color: #dbe3f8;
+  background: #121f36;
+  border-color: #3e4c69;
+  color: #bdd0ef;
 }
 
 button.danger,
@@ -185,8 +184,8 @@ button.warn,
 
 .confirm-modal .users-modal-footer .btn.danger {
   border-color: rgba(255, 111, 123, 0.55);
-  background: linear-gradient(180deg, #e43d5f, #c7244a);
-  color: #ffe8ed;
+  background: rgba(255, 111, 123, 0.16);
+  color: #ffc9cf;
 }
 
 .toast {
@@ -978,6 +977,15 @@ td {
 .users-google-card:hover {
   border-color: #5f8fcb;
   background: #1a3052;
+}
+
+.users-google-card.readonly {
+  cursor: default;
+}
+
+.users-google-card.readonly:hover {
+  border-color: #3c4f74;
+  background: #13223c;
 }
 
 .users-google-link-icon {

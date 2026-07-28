@@ -33,8 +33,6 @@ function BackupPreviewStats({ preview }: { preview: BackupPreview }) {
       </div>
       <p className="config-preview-meta">
         导出时间 {preview.exportedAt.slice(0, 19).replace('T', ' ')}
-        {' · '}
-        {preview.registrationEnabled ? '开放注册' : '关闭注册'}
       </p>
     </div>
   );
@@ -148,7 +146,7 @@ export function AdminConfigPage() {
       <div className="main-head">
         <div className="head-text">
           <h1 className="head-title">系统设置</h1>
-          <p className="head-sub">加密备份与灾难恢复；开放注册请在用户管理中配置。</p>
+          <p className="head-sub">加密备份与灾难恢复。</p>
         </div>
       </div>
 

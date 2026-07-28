@@ -25,7 +25,6 @@ export async function api<T>(
 
 export type SystemState = {
   state: 'NEEDS_SETUP' | 'ACTIVE';
-  registrationEnabled: boolean;
   origin?: string;
 };
 
@@ -51,12 +50,10 @@ export type AdminUser = {
   googleLinked: boolean;
   googleEmail: string;
   googleCanUnlink: boolean;
-  googleAllowedEmail: string;
   microsoftEnabled: boolean;
   microsoftLinked: boolean;
   microsoftEmail: string;
   microsoftCanUnlink: boolean;
-  microsoftAllowedEmail: string;
   hasPasskey: boolean;
   isRoot?: boolean;
 };
@@ -163,7 +160,6 @@ export type BackupPreview = {
   invites: number;
   l1Grants: number;
   exportedAt: string;
-  registrationEnabled: boolean;
 };
 
 export type ValidateResult = {
@@ -171,6 +167,32 @@ export type ValidateResult = {
   message?: string;
   error?: string;
   detail?: string;
+};
+
+export type CompleteInfo = {
+  name: string;
+  role: string;
+  status: string;
+  expiresAt: string;
+  openCount: number;
+  maxOpens: number;
+};
+
+export type CompleteLinkResult = {
+  completeUrl: string;
+  completeToken: string;
+  expiresAt: string;
+  ttlSeconds: number;
+};
+
+export type MeOAuthInfo = {
+  googleLinked: boolean;
+  googleEmail: string;
+  googleCanUnlink: boolean;
+  microsoftLinked: boolean;
+  microsoftEmail: string;
+  microsoftCanUnlink: boolean;
+  passkeyCount: number;
 };
 
 export type BackupExportResult = {

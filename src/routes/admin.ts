@@ -3,7 +3,7 @@ import { eq, and, ne, sql, desc, isNull } from 'drizzle-orm';
 import type { AuthContext, Env } from '../types';
 import { writeAuditLog } from '../lib/audit';
 import { getDb, nowIso, newId } from '../lib/db';
-import { auditLogs, authCodes, accessTokens, clients, invites, oauthIdentities, passkeys, passkeyDelegateTokens, sessions, settings, systemConfig, userClientAccess, userL1Access, users } from '../lib/schema';
+import { auditLogs, authCodes, accessTokens, clients, completeLinks, invites, oauthIdentities, passkeys, passkeyDelegateTokens, sessions, settings, systemConfig, userClientAccess, userL1Access, users } from '../lib/schema';
 import { requireAdmin } from '../middleware/auth';
 import { appendCookies, clearCookie, deleteUserSessions } from '../lib/session';
 import { getUserPermissions, setUserL1Access } from '../lib/permissions';
@@ -19,39 +19,15 @@ import { buildOAuthUserFieldsSync } from './oauth';
 import { getGoogleOAuthConfig, getMicrosoftOAuthConfig } from '../lib/oauth-config';
 import { getRootUserId, isRootUserId, ROOT_USER_NAME } from '../lib/root-user';
 import { isValidEmailFormat } from '../lib/oauth-email';
+import {
+  createCompleteLink,
+  completeLinkUrl,
+  COMPLETE_TTL_SECONDS,
+} from '../lib/complete';
 
 export const adminRoutes = new Hono<{ Bindings: Env; Variables: AuthContext }>();
 
 adminRoutes.use('*', requireAdmin);
-
-adminRoutes.get('/config', async (c) => {
-  const db = getDb(c.env);
-  const config = await db.select().from(systemConfig).where(eq(systemConfig.id, 1)).get();
-  return c.json({
-    state: config?.state,
-    registrationEnabled: Boolean(config?.registrationEnabled),
-  });
-});
-
-adminRoutes.patch('/config', async (c) => {
-  const body = await c.req.json<{ registrationEnabled?: boolean }>();
-  if (typeof body.registrationEnabled !== 'boolean') {
-    return c.json({ error: 'registrationEnabled required' }, 400);
-  }
-
-  const db = getDb(c.env);
-  const ts = nowIso();
-  await db
-    .update(systemConfig)
-    .set({ registrationEnabled: body.registrationEnabled ? 1 : 0, updatedAt: ts })
-    .where(eq(systemConfig.id, 1));
-
-  await writeAuditLog(c.env, c.get('user').id, 'CONFIG_UPDATE', null, {
-    registrationEnabled: body.registrationEnabled,
-  });
-
-  return c.json({ ok: true });
-});
 
 adminRoutes.get('/users', async (c) => {
   const status = c.req.query('status');
@@ -273,6 +249,13 @@ adminRoutes.delete('/users/:id', async (c) => {
   }
 
   await deleteUserSessions(c.env, targetId);
+  await db.delete(oauthIdentities).where(eq(oauthIdentities.userId, targetId));
+  await db.delete(passkeys).where(eq(passkeys.userId, targetId));
+  await db.delete(passkeyDelegateTokens).where(eq(passkeyDelegateTokens.userId, targetId));
+  await db.delete(completeLinks).where(eq(completeLinks.userId, targetId));
+  await db.delete(userL1Access).where(eq(userL1Access.userId, targetId));
+  await db.delete(userClientAccess).where(eq(userClientAccess.userId, targetId));
+  await db.delete(invites).where(eq(invites.userId, targetId));
   await db.delete(users).where(eq(users.id, targetId));
   await writeAuditLog(c.env, actor.id, 'USER_DELETE', targetId, {
     name: target.name,
@@ -347,9 +330,7 @@ adminRoutes.post('/users', async (c) => {
     email,
     name,
     role,
-    status: 'active',
-    allowedGoogleEmail: '',
-    allowedMicrosoftEmail: '',
+    status: 'pending',
     createdAt: ts,
     updatedAt: ts,
   });
@@ -358,6 +339,29 @@ adminRoutes.post('/users', async (c) => {
   await writeAuditLog(c.env, c.get('user').id, 'USER_CREATE', userId, { name, email, role });
 
   return c.json({ ok: true, userId, name, email, role }, 201);
+});
+
+adminRoutes.post('/users/:id/complete-link', async (c) => {
+  const targetId = c.req.param('id');
+  const db = getDb(c.env);
+  const target = await db.select().from(users).where(eq(users.id, targetId)).get();
+  if (!target) {
+    return c.json({ error: 'User not found' }, 404);
+  }
+  const { token, expiresAt } = await createCompleteLink(c.env, targetId);
+  await db
+    .update(users)
+    .set({ updatedAt: nowIso() })
+    .where(eq(users.id, targetId));
+  await writeAuditLog(c.env, c.get('user').id, 'COMPLETE_LINK_CREATE', targetId, {});
+  const url = completeLinkUrl(c.env, token);
+  return c.json({
+    ok: true,
+    completeUrl: url,
+    completeToken: token,
+    expiresAt,
+    ttlSeconds: COMPLETE_TTL_SECONDS,
+  });
 });
 
 adminRoutes.get('/users/:id/passkeys', async (c) => {
@@ -742,7 +746,6 @@ adminRoutes.post('/system/reset', async (c) => {
     .update(systemConfig)
     .set({
       state: 'NEEDS_SETUP',
-      registrationEnabled: 0,
       updatedAt: nowIso(),
     })
     .where(eq(systemConfig.id, 1));
