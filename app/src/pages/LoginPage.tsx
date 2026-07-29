@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { startAuthentication } from '@simplewebauthn/browser';
 import { api } from '../api';
 
@@ -94,6 +94,11 @@ export function LoginPage() {
             )}
           </div>
         )}
+        <p className="legal-footer">
+          <Link to="/privacy">隐私政策</Link>
+          <span className="legal-footer-sep">·</span>
+          <Link to="/terms">服务条款</Link>
+        </p>
       </div>
     </div>
   );

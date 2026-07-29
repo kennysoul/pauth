@@ -5,6 +5,8 @@ import { SetupPage } from './pages/SetupPage';
 import { LoginPage } from './pages/LoginPage';
 import { LinkDevicePage } from './pages/LinkDevicePage';
 import { CompletePage } from './pages/CompletePage';
+import { PrivacyPage } from './pages/PrivacyPage';
+import { TermsPage } from './pages/TermsPage';
 import { AdminLayout } from './pages/admin/AdminLayout';
 import { AdminUsersPage } from './pages/admin/AdminUsersPage';
 import { AdminClientsPage } from './pages/admin/AdminClientsPage';
@@ -14,6 +16,8 @@ import { AdminLogsPage } from './pages/admin/AdminLogsPage';
 import { InvitePage } from './pages/InvitePage';
 import { MeLayout } from './pages/me/MeLayout';
 import { MeProfilePage } from './pages/me/MeProfilePage';
+
+const PUBLIC_PATHS = ['/privacy', '/terms'];
 
 export function App() {
   const [state, setState] = useState<SystemState | null>(null);
@@ -42,7 +46,8 @@ export function App() {
     );
   }
 
-  if (state.state === 'NEEDS_SETUP' && !location.pathname.startsWith('/setup')) {
+  const isPublic = PUBLIC_PATHS.some((p) => location.pathname === p);
+  if (state.state === 'NEEDS_SETUP' && !location.pathname.startsWith('/setup') && !isPublic) {
     return <Navigate to="/setup" replace />;
   }
 
@@ -54,6 +59,8 @@ export function App() {
     <Routes>
       <Route path="/setup" element={<SetupPage />} />
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/privacy" element={<PrivacyPage />} />
+      <Route path="/terms" element={<TermsPage />} />
       <Route path="/invite/:token" element={<InvitePage />} />
       <Route path="/link-device" element={<LinkDevicePage />} />
       <Route path="/complete/:token" element={<CompletePage />} />
