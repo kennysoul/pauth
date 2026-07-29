@@ -1,14 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { api, type SystemState } from './api';
-import { HomePage } from './pages/HomePage';
-import { AboutPage } from './pages/AboutPage';
 import { SetupPage } from './pages/SetupPage';
 import { LoginPage } from './pages/LoginPage';
 import { LinkDevicePage } from './pages/LinkDevicePage';
 import { CompletePage } from './pages/CompletePage';
-import { PrivacyPage } from './pages/PrivacyPage';
-import { TermsPage } from './pages/TermsPage';
 import { AdminLayout } from './pages/admin/AdminLayout';
 import { AdminUsersPage } from './pages/admin/AdminUsersPage';
 import { AdminClientsPage } from './pages/admin/AdminClientsPage';
@@ -18,8 +14,6 @@ import { AdminLogsPage } from './pages/admin/AdminLogsPage';
 import { InvitePage } from './pages/InvitePage';
 import { MeLayout } from './pages/me/MeLayout';
 import { MeProfilePage } from './pages/me/MeProfilePage';
-
-const PUBLIC_PATHS = ['/', '/about', '/privacy', '/terms'];
 
 export function App() {
   const [state, setState] = useState<SystemState | null>(null);
@@ -48,8 +42,7 @@ export function App() {
     );
   }
 
-  const isPublic = PUBLIC_PATHS.some((p) => location.pathname === p);
-  if (state.state === 'NEEDS_SETUP' && !location.pathname.startsWith('/setup') && !isPublic) {
+  if (state.state === 'NEEDS_SETUP' && !location.pathname.startsWith('/setup')) {
     return <Navigate to="/setup" replace />;
   }
 
@@ -59,12 +52,8 @@ export function App() {
 
   return (
     <Routes>
-      <Route path="/" element={<HomePage />} />
-      <Route path="/about" element={<AboutPage />} />
       <Route path="/setup" element={<SetupPage />} />
       <Route path="/login" element={<LoginPage />} />
-      <Route path="/privacy" element={<PrivacyPage />} />
-      <Route path="/terms" element={<TermsPage />} />
       <Route path="/invite/:token" element={<InvitePage />} />
       <Route path="/link-device" element={<LinkDevicePage />} />
       <Route path="/complete/:token" element={<CompletePage />} />
@@ -81,6 +70,12 @@ export function App() {
         <Route path="config" element={<AdminConfigPage />} />
         <Route path="logs" element={<AdminLogsPage />} />
       </Route>
+      <Route
+        path="/"
+        element={
+          <Navigate to={state.state === 'NEEDS_SETUP' ? '/setup' : '/login'} replace />
+        }
+      />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
