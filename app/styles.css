@@ -373,6 +373,17 @@ button.warn,
   color: #4b5672;
   margin: 0 0.35rem;
 }
+.home-desc {
+  margin: 0 0 1rem;
+  text-align: left;
+  font-size: 14px;
+  line-height: 1.65;
+  color: #8aa1c9;
+}
+.home-desc a {
+  color: #6c8bff;
+  text-decoration: underline;
+}
 
 /* About page (Google brand verification target) */
 .about-page {

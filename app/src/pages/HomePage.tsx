@@ -186,6 +186,14 @@ export function HomePage() {
           </button>
         </div>
 
+        <p className="home-desc">
+          Oauth KASS 是面向内部团队的身份认证服务，通过 Passkey、
+          Google OAuth 和 Microsoft OAuth 验证用户身份，并基于 OpenID
+          Connect 协议为内部应用提供单点登录（SSO）。本服务仅收集完成
+          身份认证所必需的信息，不会将 Google 用户数据用于广告、营销或
+          出售给第三方。详情见 <Link to="/privacy">隐私政策</Link>。
+        </p>
+
         <p className="home-foot">
           <Link to="/privacy">隐私政策</Link>
           <span className="home-foot-sep">·</span>
