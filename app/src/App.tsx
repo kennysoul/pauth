@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { api, type SystemState } from './api';
-import { HomePage } from './pages/HomePage';
+import { AboutPage } from './pages/AboutPage';
 import { SetupPage } from './pages/SetupPage';
 import { LoginPage } from './pages/LoginPage';
 import { LinkDevicePage } from './pages/LinkDevicePage';
@@ -18,7 +18,7 @@ import { InvitePage } from './pages/InvitePage';
 import { MeLayout } from './pages/me/MeLayout';
 import { MeProfilePage } from './pages/me/MeProfilePage';
 
-const PUBLIC_PATHS = ['/', '/privacy', '/terms'];
+const PUBLIC_PATHS = ['/about', '/privacy', '/terms'];
 
 export function App() {
   const [state, setState] = useState<SystemState | null>(null);
@@ -58,7 +58,7 @@ export function App() {
 
   return (
     <Routes>
-      <Route path="/" element={<HomePage />} />
+      <Route path="/about" element={<AboutPage />} />
       <Route path="/setup" element={<SetupPage />} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/privacy" element={<PrivacyPage />} />
@@ -79,6 +79,15 @@ export function App() {
         <Route path="config" element={<AdminConfigPage />} />
         <Route path="logs" element={<AdminLogsPage />} />
       </Route>
+      <Route
+        path="/"
+        element={
+          <Navigate
+            to={state.state === 'NEEDS_SETUP' ? '/setup' : '/login'}
+            replace
+          />
+        }
+      />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

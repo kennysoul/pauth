@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, type SystemState } from '../api';
 
-export function HomePage() {
+export function AboutPage() {
   const [state, setState] = useState<SystemState | null>(null);
   const [error, setError] = useState<string | null>(null);
 
