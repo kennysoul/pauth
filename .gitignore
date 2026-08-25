@@ -5,6 +5,7 @@ dist/
 wrangler.local.jsonc
 wrangler.cdnc-us.jsonc
 wrangler.intruxt.jsonc
+wrangler.kass-cc.jsonc
 .deploy-cloudflare.env
 *.local
 __pycache__/

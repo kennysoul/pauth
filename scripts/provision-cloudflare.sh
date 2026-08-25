@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Provision Cloudflare D1 + KV and write wrangler configs (upper half of deploy-cloudflare.sh).
-# Use after [Deploy to Cloudflare] badge: Workers Builds handles build + deploy.
+# Provision Cloudflare D1 + KV and write wrangler configs (no build/deploy).
+# Pair with `npm run deploy:workers` for Cloudflare Workers Builds, or with
+# `full-deploy-cloudflare.sh` for a one-shot local deploy.
 #
 # Examples:
 #   ./scripts/provision-cloudflare.sh --yes auth.example.com
@@ -44,7 +45,7 @@ provision_usage() {
 Usage: provision-cloudflare.sh [options] [auth-host]
 
 Provision D1 + KV and write wrangler configs for pauth (no build/deploy).
-Pair with Deploy to Cloudflare badge + Workers Builds (npm run deploy:workers).
+Pair with `npm run deploy:workers` (Workers Builds) or `full-deploy-cloudflare.sh` (local).
 
 常规用法:
   ./provision-cloudflare.sh --yes auth.example.com
