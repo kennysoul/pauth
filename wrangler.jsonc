@@ -1,0 +1,52 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "pauth-auth-kass-cc",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-06-05",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "vars": {
+    "RP_ID": "kass.cc",
+    "RP_NAME": "Kass Auth",
+    "ORIGIN": "https://auth.kass.cc",
+    "COOKIE_DOMAIN": ".kass.cc",
+    "AUTH_HOST": "auth.kass.cc",
+    "SESSION_TTL_SECONDS": "604800",
+    "SETUP_TTL_SECONDS": "600"
+  },
+
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "pauth-auth-kass-cc-db",
+      "database_id": "5911710d-ea4a-483e-abaa-9f6be347b858",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  "kv_namespaces": [
+    {
+      "binding": "CHALLENGES",
+      "id": "bdf9becc70d849e2a9f4c41eca2d1b6a"
+    }
+  ],
+
+  "routes": [
+    {
+      "pattern": "auth.kass.cc",
+      "zone_name": "kass.cc",
+      "custom_domain": true
+    }
+  ],
+
+  "observability": {
+    "enabled": true
+  }
+}

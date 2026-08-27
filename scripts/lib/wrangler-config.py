@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Merge or write wrangler JSONC configs for the Cloudflare deploy scripts."""
+"""Merge or write wrangler JSONC configs for deploy-cloudflare.sh."""
 from __future__ import annotations
 
 import argparse
