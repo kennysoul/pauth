@@ -19,7 +19,7 @@ cp wrangler.local.jsonc.example wrangler.local.jsonc
 cp .dev.vars.example .dev.vars
 ```
 
-Edit `wrangler.local.jsonc` (gitignored) with your values. Do **not** put real domains or resource IDs in `wrangler.jsonc`.
+Edit `wrangler.local.jsonc` (gitignored) with your values. `wrangler.jsonc` (the Workers Builds config) is a **placeholder template** in upstream — `npm run provision:cloudflare` overwrites it with your real values on your first deploy; do **not** commit real domains or resource IDs back into the template.
 
 For **API-only local smoke tests** on `http://127.0.0.1:8787`, you may set `RP_ID=localhost`, `ORIGIN=http://127.0.0.1:8787`, and leave `COOKIE_DOMAIN` empty. The template `wrangler.local.jsonc.example` uses `example.com` placeholders to mirror production layout. Passkey flows in a real browser typically need a stable hostname (reverse proxy or dev domain), not bare `127.0.0.1`.
 

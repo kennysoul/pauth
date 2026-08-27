@@ -1,16 +1,22 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "pauth-auth-kass-cc",
+  "name": "passkey-auth",
   "main": "src/index.ts",
   "compatibility_date": "2025-06-05",
   "compatibility_flags": ["nodejs_compat"],
 
+  // Workers Builds reads this file. It is a placeholder template in upstream.
+  // Do NOT commit real domains or resource IDs. Run
+  // `npm run provision:cloudflare` (or the bootstrap script with
+  // --deploy-mode git) to overwrite these placeholders with your own values
+  // before pushing.
+
   "vars": {
-    "RP_ID": "kass.cc",
-    "RP_NAME": "Kass Auth",
-    "ORIGIN": "https://auth.kass.cc",
-    "COOKIE_DOMAIN": ".kass.cc",
-    "AUTH_HOST": "auth.kass.cc",
+    "RP_ID": "example.com",
+    "RP_NAME": "My Auth",
+    "ORIGIN": "https://auth.example.com",
+    "COOKIE_DOMAIN": ".example.com",
+    "AUTH_HOST": "auth.example.com",
     "SESSION_TTL_SECONDS": "604800",
     "SETUP_TTL_SECONDS": "600"
   },
@@ -25,8 +31,8 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "pauth-auth-kass-cc-db",
-      "database_id": "5911710d-ea4a-483e-abaa-9f6be347b858",
+      "database_name": "passkey-auth-db",
+      "database_id": "00000000-0000-0000-0000-000000000000",
       "migrations_dir": "migrations"
     }
   ],
@@ -34,14 +40,15 @@
   "kv_namespaces": [
     {
       "binding": "CHALLENGES",
-      "id": "bdf9becc70d849e2a9f4c41eca2d1b6a"
+      "id": "00000000000000000000000000000000",
+      "preview_id": "00000000000000000000000000000000"
     }
   ],
 
   "routes": [
     {
-      "pattern": "auth.kass.cc",
-      "zone_name": "kass.cc",
+      "pattern": "auth.example.com",
+      "zone_name": "example.com",
       "custom_domain": true
     }
   ],

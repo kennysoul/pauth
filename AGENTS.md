@@ -35,12 +35,14 @@ npx tsc --noEmit
 
 | File | Purpose | Git |
 |------|---------|-----|
-| `wrangler.jsonc` | Workers Builds (primary auth domain) | committed |
-| `wrangler.production.jsonc` | Alternative Workers Builds config | from `.example`, committed after provision |
+| `wrangler.jsonc` | Workers Builds primary config — committed as a **placeholder template** (example.com / `00000000-…`). Each focker runs `npm run provision:cloudflare` to overwrite it with their own values before their first push. | committed (placeholder) |
+| `wrangler.production.jsonc` | Alternative Workers Builds config (from `.example`) | committed after provision |
 | `wrangler.local.jsonc` | Local dev | gitignored |
-| `wrangler.<name>.jsonc` (e.g. secondary manual-deploy domains) | Manual deploy to additional auth domains | gitignored (public repo) |
+| `wrangler.<name>.jsonc` (e.g. secondary manual-deploy domains, or maintainer's `wrangler.kass-cc.jsonc`) | Manual deploy to additional auth domains | gitignored (public repo) |
 
 All wrangler commands need `--config <file>` to target the right config. Never run wrangler without it. Each additional auth domain gets its own gitignored `wrangler.<slug>.jsonc` — never commit these (they contain real D1/KV resource IDs tied to a specific domain).
+
+**Why `wrangler.jsonc` is upstream-placeholder**: if upstream committed a populated `wrangler.jsonc` with the maintainer's domain, every fork would silently inherit it and Cloudflare would echo those values in build logs. The placeholder template is the seed; `provision:cloudflare` (or `full-deploy-cloudflare.sh --deploy-mode git`) writes the real `wrangler.jsonc` into the focker's checkout; they commit it; Workers Builds reads theirs. `npm run lint:wrangler` (CI, wired into `deploy:workers`) fails the moment `kass.cc` / `cdnc.us` / `intruxt.com` or a real UUID leaks into the committed file.
 
 ### Directory layout
 
@@ -104,6 +106,7 @@ AES-256-GCM + PBKDF2 (100k iterations, Workers Web Crypto API limit). Root user 
 - **Email field**: users have an email (unique) used **only** for OIDC relying-party matching (e.g. Immich) — it has no relationship to the Google/Microsoft identity used for login. Admin sets it on creation (optional — auto-generates `username@domain` if blank). Users can edit their own email via `PUT /me/email`. Admin can edit any user's email.
 - **Global button styling**: `button`/`.btn` base rules were unified to match the `.credential-btn` look (dark navy fill `#121f36`, `#3e4c69` border) used in **用户管理**. Any new page should rely on the shared base styles rather than introducing a new button look.
 - **Deploy scripts** (`scripts/`) handle full provisioning (D1, KV, secrets, domain binding) from just an auth hostname. `npm run deploy:full` calls `scripts/full-deploy-cloudflare.sh`. Use these for greenfield deploys; manual `wrangler deploy` for updates to an existing Worker.
+- **Maintainer's `auth.kass.cc` is deployed manually**, not via Workers Builds. The Workers Builds GitHub integration is intentionally NOT configured for kass.cc because upstream `wrangler.jsonc` is a placeholder (see wrangler config table above). Use `npm run deploy:kass-cc` (Worker) and `npm run db:migrate:remote:kass-cc` (D1 migrations) from a local checkout that has `wrangler.kass-cc.jsonc` (gitignored). `npx wrangler login` or `CLOUDFLARE_API_TOKEN` required.
 
 ## OIDC / generic SSO support
 

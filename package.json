@@ -11,14 +11,17 @@
     "dev": "npm run build:app && wrangler dev --config wrangler.local.jsonc",
     "dev:app": "vite build --watch",
     "deploy": "npm run build && wrangler deploy --config wrangler.local.jsonc",
-    "deploy:workers": "npm run db:migrate:remote:workers && wrangler deploy --config wrangler.jsonc",
+    "deploy:workers": "npm run lint:wrangler && npm run db:migrate:remote:workers && wrangler deploy --config wrangler.jsonc",
     "deploy:production": "npm run db:migrate:remote:workers && wrangler deploy --config wrangler.production.jsonc",
+    "deploy:kass-cc": "npm run build && wrangler deploy --config wrangler.kass-cc.jsonc",
+    "lint:wrangler": "node scripts/check-wrangler-public.mjs",
     "deploy:bootstrap": "bash scripts/full-deploy-cloudflare.sh",
     "deploy:full": "bash scripts/full-deploy-cloudflare.sh",
     "provision:cloudflare": "bash scripts/provision-cloudflare.sh",
     "db:migrate:local": "wrangler d1 migrations apply DB --local --config wrangler.local.jsonc",
     "db:migrate:remote": "wrangler d1 migrations apply DB --remote --config wrangler.local.jsonc",
     "db:migrate:remote:workers": "wrangler d1 migrations apply DB --remote --config wrangler.jsonc",
+    "db:migrate:remote:kass-cc": "wrangler d1 migrations apply DB --remote --config wrangler.kass-cc.jsonc",
     "types": "wrangler types"
   },
   "cloudflare": {

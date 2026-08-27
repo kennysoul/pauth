@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Provision Cloudflare D1 + KV and write wrangler configs (upper half of deploy-cloudflare.sh).
+# Provision Cloudflare D1 + KV and write wrangler configs (no build/deploy).
 # Use after [Deploy to Cloudflare] badge: Workers Builds handles build + deploy.
 #
 # Examples:
