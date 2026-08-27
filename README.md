@@ -334,72 +334,12 @@ npm run deploy:full -- --yes auth.example.com
 
 ---
 
-Three ways to deploy — pick one:
+Two ways to deploy — pick one:
 
 | Method | Best for |
 |--------|----------|
-| **[Deploy to Cloudflare](#deploy-to-cloudflare-badge)** badge + provision script | Fork on GitHub, CI deploy via Workers Builds |
 | **Bootstrap script** (`full-deploy-cloudflare.sh`) | One-shot local deploy — **只传 auth 域名** |
 | **Manual** | Existing checkout, full control |
-
-### Deploy to Cloudflare badge
-
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/your-org/pauth)
-
-**Flow:** badge creates your GitHub fork + Workers Builds project → **provision script** creates D1/KV and writes real IDs into `wrangler.jsonc` → push → Builds runs `npm run deploy:workers`.
-
-#### Step 1 — Click the badge
-
-Connect your GitHub account. Cloudflare forks the repo and sets up Workers Builds. Use these build settings:
-
-| Field | Value |
-|-------|--------|
-| Build command | `npm run build` |
-| Deploy command | `npm run deploy:workers` |
-
-Do **not** rely on the badge alone for D1/KV with your domain vars — run Step 2.
-
-#### Step 2 — Provision resources (upper half of bootstrap)
-
-On your machine (Node 20+, `npx wrangler login`):
-
-```bash
-git clone https://github.com/YOUR_USER/pauth.git
-cd pauth
-
-# Resources only — no build/deploy
-curl -fsSL https://raw.githubusercontent.com/your-org/pauth/main/scripts/provision-cloudflare.sh -o provision.sh
-chmod +x provision.sh
-./provision.sh --dir . --skip-clone --yes auth.example.com
-```
-
-This creates D1 + KV, writes `wrangler.jsonc`, `wrangler.production.jsonc`, `wrangler.local.jsonc`, and `.dev.vars`.
-
-#### Step 3 — Push config + set secret
-
-```bash
-git add wrangler.jsonc wrangler.production.jsonc
-git commit -m "Configure Cloudflare D1/KV and domain vars"
-git push
-```
-
-In Cloudflare Dashboard → Worker → **Settings → Variables and Secrets** → add `SESSION_SECRET` (copy from `.dev.vars`; do not commit `.dev.vars`).
-
-Workers Builds will run migrate + deploy on push.
-
-#### Step 4 — Bind domain + setup
-
-After the first successful Build, bind the auth hostname and upload the secret if not done in Dashboard:
-
-```bash
-./scripts/deploy-cloudflare.sh --dir . --skip-clone --yes auth.example.com --config-policy keep
-```
-
-(`--config-policy keep` skips rewriting wrangler files; script uploads `SESSION_SECRET`, runs migrate, deploy, and binds `AUTH_HOST`.)
-
-Visit `https://auth.example.com/setup` and register the **root** admin Passkey.
-
----
 
 ### Bootstrap script (full local deploy)
 
@@ -418,16 +358,7 @@ npm run deploy:full -- --yes auth.example.com
 ./scripts/full-deploy-cloudflare.sh --yes auth.example.com
 ```
 
-Split scripts (badge / CI): `provision-cloudflare.sh` + `deploy-cloudflare.sh` — see [Deploy to Cloudflare badge](#deploy-to-cloudflare-badge).
-
-**Single-file download** (`deploy-cloudflare.sh`; fetches `deploy-common.sh` if needed):
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/your-org/pauth/main/scripts/deploy-cloudflare.sh -o bootstrap-pauth.sh
-chmod +x bootstrap-pauth.sh
-npx wrangler login
-./bootstrap-pauth.sh --yes auth.example.com
-```
+`provision-cloudflare.sh` (resources only, no build/deploy) is still bundled if you prefer splitting provisioning from deployment; see comments at the top of that file.
 
 **高级用法（可选参数）**
 
@@ -450,7 +381,7 @@ Still required: Node.js 20+, git, python3, curl, and Cloudflare auth (`npx wrang
 
 | File | Purpose | Git |
 |------|---------|-----|
-| `wrangler.jsonc` | Deploy badge / Workers Builds (`npm run deploy:workers`) | commit after provision |
+| `wrangler.jsonc` | Workers Builds (`npm run deploy:workers`) | commit after provision |
 | `wrangler.<slug>.jsonc` (e.g. `wrangler.example2-com.jsonc`) | Manual deploy to an additional auth domain | gitignored (public repo) |
 | `wrangler.local.jsonc` | Local `wrangler deploy` / dev | gitignored |
 
