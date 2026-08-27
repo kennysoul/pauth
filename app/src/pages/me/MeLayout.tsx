@@ -37,7 +37,7 @@ export function MeLayout() {
     <div className="admin-layout">
       <aside className="admin-nav">
         <div className="admin-nav-user">
-          <div className="admin-nav-kicker">Pass Auth</div>
+          <div className="admin-nav-kicker">Passkey Auth</div>
           <div className="admin-nav-title">{me.name}</div>
         </div>
         <nav className="admin-nav-group">
