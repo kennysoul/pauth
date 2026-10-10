@@ -1,4 +1,5 @@
 import type { Env } from '../types';
+import { sanitizeReturnTo } from './return-to';
 
 export type OAuthStatePayload = {
   provider: 'google' | 'microsoft';
@@ -30,4 +31,21 @@ export function safeNextPath(next: string | null | undefined, fallback: string):
   const value = String(next || '').trim();
   if (!value.startsWith('/') || value.startsWith('//')) return fallback;
   return value;
+}
+
+/**
+ * Post-login redirect target for OAuth.
+ * Accepts same-origin relative paths, or absolute URLs allowed by sanitizeReturnTo
+ * (L1 forward_auth return_to = https://app.example.com/...).
+ */
+export function resolveLoginNext(
+  next: string | null | undefined,
+  env: Env,
+  fallback: string,
+): string {
+  const value = String(next || '').trim();
+  if (!value) return fallback;
+  const absolute = sanitizeReturnTo(value, env);
+  if (absolute) return absolute;
+  return safeNextPath(value, fallback);
 }

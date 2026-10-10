@@ -21,7 +21,7 @@ import {
   googleRedirectUri,
   microsoftRedirectUri,
 } from '../lib/oauth-config';
-import { issueOAuthState, safeNextPath, takeOAuthState } from '../lib/oauth-state';
+import { issueOAuthState, resolveLoginNext, takeOAuthState } from '../lib/oauth-state';
 import { users } from '../lib/schema';
 import { appendCookies, createSession, resolveNormalSession } from '../lib/session';
 import {
@@ -74,7 +74,7 @@ async function handleBindMode(
   profile: OAuthProfile,
   oauthState: { bindUserId?: string; bindOperatorUserId?: string; next: string },
 ) {
-  const nextPath = safeNextPath(oauthState.next, '/me');
+  const nextPath = resolveLoginNext(oauthState.next, c.env, '/me');
   const bindUserId = String(oauthState.bindUserId || '').trim();
   if (!bindUserId) {
     return redirectWithError(c, nextPath, '绑定状态无效，请重试');
@@ -210,7 +210,7 @@ oauthRoutes.get('/google/start', async (c) => {
   const mode: 'login' | 'bind' | 'register' =
     rawMode === 'bind' ? 'bind' : rawMode === 'register' ? 'register' : 'login';
   const defaultNext = mode === 'bind' ? '/admin/users' : '/admin';
-  const next = safeNextPath(c.req.query('next'), defaultNext);
+  const next = resolveLoginNext(c.req.query('next'), c.env, defaultNext);
   const bindUserId = c.req.query('bind_user_id')?.trim() || undefined;
   const completeToken = c.req.query('complete_token')?.trim() || undefined;
 
@@ -262,7 +262,7 @@ oauthRoutes.get('/microsoft/start', async (c) => {
   const mode: 'login' | 'bind' | 'register' =
     rawMode === 'bind' ? 'bind' : rawMode === 'register' ? 'register' : 'login';
   const defaultNext = mode === 'bind' ? '/admin/users' : '/admin';
-  const next = safeNextPath(c.req.query('next'), defaultNext);
+  const next = resolveLoginNext(c.req.query('next'), c.env, defaultNext);
   const bindUserId = c.req.query('bind_user_id')?.trim() || undefined;
   const completeToken = c.req.query('complete_token')?.trim() || undefined;
 
@@ -326,7 +326,7 @@ oauthRoutes.get('/google/callback', async (c) => {
   }
 
   const mode = oauthState.mode;
-  const nextPath = safeNextPath(oauthState.next, mode === 'bind' ? '/admin/users' : '/admin');
+  const nextPath = resolveLoginNext(oauthState.next, c.env, mode === 'bind' ? '/admin/users' : '/admin');
   const code = c.req.query('code')?.trim();
   if (!code) {
     return redirectWithError(c, mode === 'bind' ? nextPath : '/login', '未收到 Google 授权码');
@@ -407,7 +407,7 @@ oauthRoutes.get('/microsoft/callback', async (c) => {
   }
 
   const mode = oauthState.mode;
-  const nextPath = safeNextPath(oauthState.next, mode === 'bind' ? '/admin/users' : '/admin');
+  const nextPath = resolveLoginNext(oauthState.next, c.env, mode === 'bind' ? '/admin/users' : '/admin');
   const code = c.req.query('code')?.trim();
   if (!code) {
     return redirectWithError(c, mode === 'bind' ? nextPath : '/login', '未收到 Microsoft 授权码');
