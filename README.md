@@ -1,14 +1,15 @@
 # Passkey Auth
 
-Central Passkey authentication for `*.xxx.com` (v3).
+Cloudflare Workers auth for one root domain (`*.xxx.com`): **L1** (Caddy `forward_auth`) + **L2** (OIDC for apps).
+
+Sign-in is **Passkey / Google / Microsoft only** — no passwords, no open self-registration. Admins create accounts; users activate via an activation link. Stack: Hono + D1 + KV + Vite SPA.
 
 **API route index:** [`docs/API.md`](docs/API.md)
 
 ## Requirements
 
 - Node.js 20+ (`package.json` `engines.node`: `>=20.9.0`)
-- **Current lockfile**: Wrangler 3 (`wrangler@^3`) — used by `npm run dev` / `npm run deploy`
-- **Production optional upgrade**: Node 22+ and `wrangler@4` (update `package.json` when you adopt it)
+- Wrangler 4 (`wrangler@^4` in `package.json`) — used by `npm run dev` / `npm run deploy`
 
 ## Local development
 
@@ -40,8 +41,9 @@ Open `https://auth.<your-domain>/setup` (via your reverse proxy) or http://127.0
 
 1. Visit `/setup` — register Passkey for the fixed **root** bootstrap admin (name is always `root`)
 2. Admin panel at `/admin`
-3. Create a user in **用户管理** (name + optional email)
-4. Generate an **激活链接** (activation link) for that user — they open it and complete activation via Passkey, Google, or Microsoft
+3. (Optional) **集成与安全** — configure Google / Microsoft OAuth; until then, login only shows Passkey
+4. Create a user in **用户管理** (name + optional email)
+5. Generate an **激活链接** (activation link) for that user — they open it and complete activation via Passkey, Google, or Microsoft
 
 ### Admin console
 
@@ -49,7 +51,7 @@ Open `https://auth.<your-domain>/setup` (via your reverse proxy) or http://127.0
 |------|---------|
 | 用户管理 | Users, activation links, L1 grants, Passkey per user (read-only Google/Microsoft status for others; self-service only) |
 | 应用管理 | OAuth clients (L2 / L1+L2) |
-| 集成与安全 | Google / Microsoft OAuth, WEBAUTH runtime display |
+| 集成与安全 | Google / Microsoft client IDs & secrets (required before those buttons appear on `/login`) |
 | 系统设置 | Encrypted backup export/import, factory reset |
 | 审计日志 | Audit trail |
 
@@ -192,13 +194,14 @@ caddy reload --config /etc/caddy/Caddyfile
 3. Worker validates the `.xxx.com` session cookie:
    - **No valid session** → **302** to `https://auth.xxx.com/login?return_to=...`
    - **Valid session** → **200** + `X-Auth-User-*` headers; Caddy proxies to the backend
-4. After Passkey login, the Worker sets the cookie on `.xxx.com`; the user is redirected back to the original URL
+4. After login (Passkey, Google, or Microsoft), the Worker sets the cookie on `.xxx.com` and redirects to `return_to` (must be under the same `RP_ID` root domain)
 
 ### Notes
 
+- Protected host and `auth.xxx.com` must share the same root domain (`RP_ID` / `COOKIE_DOMAIN`) — otherwise `return_to` is rejected and the user may land on `/admin` instead of the app
 - Always wrap `import auth_verify` and `reverse_proxy` in a **`route { }`** block so authentication runs before the backend is reached
 - Do **not** wrap `forward_auth` in extra `handle_errors` for 401→redirect; the Worker already returns 302
-- Backend apps may have their own login (e.g. LuCI `root` password) — Passkey is the **outer** gate only
+- Backend apps may have their own login (e.g. LuCI `root` password) — pauth is the **outer** gate only
 - Optional: pass `X-Auth-User-*` headers to the backend if your app can read them
 
 ### Quick test
@@ -258,178 +261,157 @@ API route index: [`docs/API.md`](docs/API.md)
 
 ## Deploy to Cloudflare
 
-### Quick start（推荐：只传认证域名）
+| Method | Use when |
+|--------|----------|
+| **[Bootstrap](#1-bootstrap-recommended)** (`full-deploy-cloudflare.sh`) | First deploy / greenfield — pass only the auth hostname |
+| **[Code-only upgrade](#2-code-only-upgrade-keep-data)** | Worker already exists; update code **without** touching D1/KV/secrets |
+| **[Workers Builds](#3-workers-builds-optional)** | Auto-deploy from GitHub (one primary Worker per repo) |
+| **[Manual](#4-manual-from-existing-checkout)** | You already have resource IDs and want full control |
 
-大多数场景只需 **一个参数** — 你的 Passkey 认证域名。脚本会从它推导 zone、Worker、D1、KV、安装目录等；**没有对应 Worker 则新建，已有则升级**。
+### Prerequisites
+
+- Node.js 20+, git, python3, curl
+- Cloudflare auth: `npx wrangler login` or `CLOUDFLARE_API_TOKEN`
+- The auth hostname’s **zone must already be on this Cloudflare account**
+- `SESSION_SECRET` ≥32 characters — store in Cloudflare Secrets (never commit)
+- **One auth host = one isolated stack** (Worker + D1 + KV + users). `auth.a.com` and `auth.b.com` do **not** share accounts
+- **L1 forward_auth sites must live under the same root domain as that auth host** (`RP_ID` / `COOKIE_DOMAIN`). Example: protect `*.example.com` with `auth.example.com`, not with `auth.other.com`
+
+### 1. Bootstrap (recommended)
+
+One-shot: provision D1/KV if needed, write config, build, migrate, deploy, bind custom domain. Self-contained script (helpers embedded; can clone the repo).
+
+**Only argument required:** the Passkey auth hostname.
 
 ```bash
-npx wrangler login   # 首次需要
+npx wrangler login   # first time
 
-# 单文件一键部署（从 GitHub 拉源码 + 部署）
-# 若 fork 到自有仓库，请设置 PAUTH_REPO_URL 或 deploy 时加 --repo
-export PAUTH_REPO_URL=https://github.com/your-org/pauth.git   # 可选
+# From a downloaded copy of the script (set PAUTH_REPO_URL if you use a fork)
+export PAUTH_REPO_URL=https://github.com/your-org/pauth.git   # optional
 curl -fsSL https://raw.githubusercontent.com/your-org/pauth/main/scripts/full-deploy-cloudflare.sh -o full-deploy.sh
 chmod +x full-deploy.sh
 ./full-deploy.sh --yes auth.example.com
+# equivalent: ./full-deploy.sh --yes --auth-host auth.example.com
 
-# 仓库内
+# From a repo checkout
 ./scripts/full-deploy-cloudflare.sh --yes auth.example.com
-npm run deploy:full -- --yes auth.example.com
+# or: npm run deploy:full -- --yes auth.example.com
 ```
 
-等价写法：
+Then open `https://auth.example.com/setup` and register the **root** admin Passkey.
 
-```bash
-./full-deploy.sh --yes --auth-host auth.example.com
-```
+#### What the hostname implies
 
-完成后访问 `https://auth.example.com/setup` 注册 **root** 管理员 Passkey。
-
-#### 从 `auth.example.com` 自动推导
-
-| 项目 | 规则 | 示例 |
-|------|------|------|
-| 根域名 (zone) | 去掉最左侧子域 | `example.com` |
+| Item | Rule | Example (`auth.example.com`) |
+|------|------|------------------------------|
+| Zone | Drop leftmost label | `example.com` |
 | Worker | `pauth-<auth-host-slug>` | `pauth-auth-example-com` |
 | D1 | `pauth-<auth-host-slug>-db` | `pauth-auth-example-com-db` |
 | KV | `CHALLENGES-pauth-<auth-host-slug>` | `CHALLENGES-pauth-auth-example-com` |
-| 安装目录 | `~/pauth-<auth-host-slug>` | `~/pauth-auth-example-com` |
-| `RP_ID` / Cookie | 来自 zone | `.example.com` |
-| `ORIGIN` | `https://<auth-host>` | `https://auth.example.com` |
+| Install dir | `~/pauth-<auth-host-slug>` | `~/pauth-auth-example-com` |
+| `RP_ID` / cookie | From zone | `example.com` / `.example.com` |
+| `ORIGIN` / `AUTH_HOST` | Auth URL / host | `https://auth.example.com` / `auth.example.com` |
 
-每个 auth 域名 **独立一套** Worker + D1 + KV，部署多个域名互不冲突。
+#### New vs upgrade (same command)
 
-#### 新建 vs 升级
+| Situation | Behavior |
+|-----------|----------|
+| No Worker / no local config for that host | **Create** D1, KV, Worker |
+| `~/pauth-<slug>/wrangler.local.jsonc` exists and `AUTH_HOST` matches | **Upgrade** — keep vars and resource IDs |
+| Cloudflare already has a Worker bound to that hostname (API token required) | **Upgrade** — reuse that Worker |
 
-| 情况 | 行为 |
-|------|------|
-| 该域名尚无 Worker / 本地无配置 | **新建** D1、KV、Worker |
-| `~/pauth-<slug>/wrangler.local.jsonc` 已存在且 `AUTH_HOST` 匹配 | **升级**，保留 vars 与资源 ID |
-| Cloudflare 上该域名已绑定 Worker（需 API Token） | **升级**，自动沿用该 Worker |
+Re-running the same command upgrades by default (`merge-bindings`). The script checks the zone, then force-binds `AUTH_HOST` to the Worker (overrides conflicting Worker/DNS). Use `--skip-domain-bind` to skip binding.
 
-再次执行同一命令 = 升级部署（默认 `merge-bindings`）。
+If a wrangler config already exists, the script prompts: **keep** / **sync D1/KV only** / **overwrite**.
 
-#### 多个域名
+#### Multiple auth domains
+
+Each host gets its own stack (users are **not** shared):
 
 ```bash
 ./scripts/full-deploy-cloudflare.sh --yes auth.example.com
 ./scripts/full-deploy-cloudflare.sh --yes auth.example2.com
 ```
 
-#### 高级选项（可选）
+#### Wrangler config files
 
-默认行为已覆盖常见需求；以下参数供高级用户覆盖：
+| File | Purpose | Git |
+|------|---------|-----|
+| `wrangler.jsonc` | Workers Builds primary (`npm run deploy:workers`) — upstream is a **placeholder**; commit **your** values after provision | commit after provision |
+| `wrangler.production.jsonc` | Optional Builds config (`--deploy-mode git`) | commit after provision |
+| `wrangler.local.jsonc` | Local `wrangler deploy` / `dev` | gitignored |
+| `wrangler.<slug>.jsonc` | Extra auth domain (manual deploy) | gitignored (contains real D1/KV IDs) |
 
-| 参数 | 用途 |
-|------|------|
-| `--zone` | 手动指定根域名（复杂后缀如 `co.uk` 时） |
-| `--dir` | 自定义安装目录（默认 `~/pauth-<slug>`） |
-| `--worker-name` | 固定 Worker 名（如沿用旧名 `passkey-auth`） |
-| `--d1-name` / `--kv-title` | 自定义 D1 / KV 名称 |
-| `--deploy-mode git` | 生成 `wrangler.production.jsonc` 供 Workers Builds |
-| `--config-policy keep\|merge-bindings\|overwrite` | 已有 wrangler 配置时的合并策略 |
-| `--skip-domain-bind` | 跳过域名绑定（自行在 wrangler routes 配置） |
-| `--rotate-secret` | 强制更新 `SESSION_SECRET` |
-| `--allow-worker-overwrite` | 允许覆盖已绑定其他域名的 Worker |
+Resources-only (no build/deploy): `scripts/provision-cloudflare.sh` / `npm run provision:cloudflare` — see comments at the top of that file.
 
----
+#### Advanced options
 
-Two ways to deploy — pick one:
-
-| Method | Best for |
-|--------|----------|
-| **Bootstrap script** (`full-deploy-cloudflare.sh`) | One-shot local deploy — **只传 auth 域名** |
-| **Manual** | Existing checkout, full control |
-
-### Bootstrap script (full local deploy)
-
-One-shot local deploy (D1/KV, config, build, migrate, deploy, domain bind). **Self-contained single file** — helpers embedded; clones repo automatically.
-
-**推荐：只传认证域名**
+| Flag | Purpose |
+|------|---------|
+| `--zone` | Override root zone (e.g. `co.uk`) |
+| `--dir` | Install directory (default `~/pauth-<slug>`) |
+| `--worker-name` | Fixed Worker name (e.g. legacy `passkey-auth`) |
+| `--d1-name` / `--kv-title` | Custom D1 / KV names |
+| `--deploy-mode git` | Also write `wrangler.production.jsonc` for Builds |
+| `--config-policy keep\|merge-bindings\|overwrite` | How to treat an existing wrangler config |
+| `--skip-clone` | Use an existing checkout (`--dir`) |
+| `--skip-domain-bind` | Do not bind the custom domain |
+| `--rotate-secret` | Force a new `SESSION_SECRET` |
+| `--allow-worker-overwrite` | Allow replacing a Worker bound to another hostname |
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/your-org/pauth/main/scripts/full-deploy-cloudflare.sh -o full-deploy.sh
-chmod +x full-deploy.sh
-npx wrangler login
-./full-deploy.sh --yes auth.example.com
-
-# From repo checkout:
-npm run deploy:full -- --yes auth.example.com
-./scripts/full-deploy-cloudflare.sh --yes auth.example.com
-```
-
-`provision-cloudflare.sh` (resources only, no build/deploy) is still bundled if you prefer splitting provisioning from deployment; see comments at the top of that file.
-
-**高级用法（可选参数）**
-
-```bash
-# Git mode — also generate wrangler.production.jsonc for Builds
+# Prepare Builds config
 ./scripts/full-deploy-cloudflare.sh --yes auth.example.com --deploy-mode git
 
-# 自定义 zone / Worker 名 / 安装目录
+# Custom names / directory
 ./scripts/full-deploy-cloudflare.sh --yes auth.example.com \
   --zone example.com --worker-name passkey-auth --dir ~/pauth-example
 
-# 升级已有 checkout（保留 wrangler 配置）
+# Upgrade existing checkout; keep wrangler file as-is
 ./scripts/full-deploy-cloudflare.sh --yes auth.example.com \
   --dir ~/pauth-auth-example-com --skip-clone --config-policy keep
 ```
 
-Still required: Node.js 20+, git, python3, curl, and Cloudflare auth (`npx wrangler login` or `CLOUDFLARE_API_TOKEN`).
+### 2. Code-only upgrade (keep data)
 
-**Wrangler config files**
+When the Worker, D1, KV, routes, vars, and secrets are already correct — ship **code + static assets only**:
 
-| File | Purpose | Git |
-|------|---------|-----|
-| `wrangler.jsonc` | Workers Builds (`npm run deploy:workers`) | commit after provision |
-| `wrangler.<slug>.jsonc` (e.g. `wrangler.example2-com.jsonc`) | Manual deploy to an additional auth domain | gitignored (public repo) |
-| `wrangler.local.jsonc` | Local `wrangler deploy` / dev | gitignored |
+```bash
+npm run build
+npx wrangler deploy --config wrangler.<slug>.jsonc   # or wrangler.local.jsonc / wrangler.jsonc
+```
 
-When a config file already exists, the script prompts: **保留** / **仅同步 D1/KV** / **完全覆盖**.
+Apply remote migrations only when new files appear under `migrations/` (e.g. `npm run db:migrate:remote` with the matching `--config`). Do **not** re-run bootstrap with `--config-policy overwrite` or `--rotate-secret` unless you intend to replace config/secrets.
 
-The script verifies the zone is on your Cloudflare account and force-binds `AUTH_HOST` to the Worker (overrides conflicting Worker/DNS). Use `--skip-domain-bind` to skip.
+### 3. Workers Builds (optional)
 
-### GitHub Builds (optional)
-
-For auto-deploy via Cloudflare Workers Builds:
-
-1. Install [Cloudflare Workers & Pages GitHub App](https://developers.cloudflare.com/workers/ci-cd/builds/git-integration/github-integration/) on your repo
+1. Install the [Cloudflare Workers GitHub App](https://developers.cloudflare.com/workers/ci-cd/builds/git-integration/github-integration/)
 2. Dashboard → Worker → Settings → Builds → Connect to Git
-3. **Build:** `npm run build` · **Deploy:** `npm run deploy:workers`
-4. Commit `wrangler.jsonc` after running `provision-cloudflare.sh`
-5. Keep `SESSION_SECRET` in Cloudflare Secrets only (from `.dev.vars` after provision)
-6. `deploy:workers` includes remote D1 migrations
+3. **Build:** `npm run build` · **Deploy:** `npm run deploy:workers` (runs `lint:wrangler`, remote D1 migrate, then deploy)
+4. After provision, commit your real `wrangler.jsonc` (not the upstream placeholder)
+5. Keep `SESSION_SECRET` in Cloudflare Secrets only
 
-> Only one worker per repo can use Workers Builds (it reads `wrangler.jsonc` at repo root). Additional workers (secondary domains) must be deployed manually.
+Only **one** Worker per repo can use Builds (it reads root `wrangler.jsonc`). Extra auth domains: code-only deploy with `wrangler.<slug>.jsonc` (see above).
 
-For a secondary domain's manual deploy:
-
-```bash
-npm run build && npx wrangler deploy --config wrangler.<slug>.jsonc
-```
-
-### Manual deploy (existing checkout)
+### 4. Manual from existing checkout
 
 ```bash
-cp wrangler.local.jsonc.example wrangler.local.jsonc   # fill in IDs + domain
-cp .dev.vars.example .dev.vars                           # SESSION_SECRET
-npm install && npm run db:migrate:remote && npm run deploy
-```
-
-Production **vars** (`wrangler.local.jsonc` or Dashboard):
-
-| Var | Example |
-|-----|---------|
-| `RP_ID` | `xxx.com` |
-| `ORIGIN` | `https://auth.xxx.com` |
-| `COOKIE_DOMAIN` | `.xxx.com` |
-| `AUTH_HOST` | `auth.xxx.com` |
-
-```bash
+cp wrangler.local.jsonc.example wrangler.local.jsonc   # fill D1/KV IDs + domain vars
+cp .dev.vars.example .dev.vars                           # SESSION_SECRET ≥32 chars
+npm install
+npm run db:migrate:remote
+npm run deploy                                           # build + deploy via wrangler.local.jsonc
 npx wrangler secret put SESSION_SECRET -c wrangler.local.jsonc
 ```
 
-## Production vars example
+### Production vars
+
+| Var | Example | Role |
+|-----|---------|------|
+| `RP_ID` | `xxx.com` | WebAuthn RP ID; L1 `return_to` allowlist root |
+| `ORIGIN` | `https://auth.xxx.com` | Public origin / OIDC issuer |
+| `COOKIE_DOMAIN` | `.xxx.com` | Session cookie domain (one login across subdomains) |
+| `AUTH_HOST` | `auth.xxx.com` | Host used in login redirect URLs |
 
 ```jsonc
 "RP_ID": "xxx.com",
