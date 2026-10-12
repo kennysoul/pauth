@@ -4,7 +4,7 @@ Cloudflare Workers auth for one root domain (`*.xxx.com`): **L1** (Caddy `forwar
 
 Sign-in is **Passkey / Google / Microsoft only** — no passwords, no open self-registration. Admins create accounts; users activate via an activation link. Stack: Hono + D1 + KV + Vite SPA.
 
-**API route index:** [`docs/API.md`](docs/API.md)
+中文说明：[README_CN.md](README_CN.md) · **API route index:** [`docs/API.md`](docs/API.md)
 
 ## Requirements
 
